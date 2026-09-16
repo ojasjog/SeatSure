@@ -4,10 +4,11 @@ import {
   getCourseProfessors,
   savePreferences,
   generateTimetable,
+  getMe,
+  TOKEN_KEY,
 } from "./api";
+import Login from "./components/Login";
 import "./App.css";
-
-const STUDENT_ID = 1;
 
 // =========================================================
 // SLOT HELPERS
@@ -544,7 +545,7 @@ function TimetableResult({
 // MAIN APP
 // =========================================================
 
-function App() {
+function Dashboard({ student, onLogout }) {
   const [courses, setCourses] = useState([]);
   const [professors, setProfessors] = useState({});
   const [coursePriorities, setCoursePriorities] =
@@ -1372,14 +1373,11 @@ function App() {
         );
 
         await savePreferences(
-          STUDENT_ID,
           preferences
         );
 
         const result =
-          await generateTimetable(
-            STUDENT_ID
-          );
+          await generateTimetable();
 
         const generated =
           Array.isArray(
@@ -1557,7 +1555,7 @@ function App() {
         <header className="main-header">
           <div>
             <div className="eyebrow">
-              VIT VELLORE
+              VIT VELLORE {student?.name ? `· ${student.name}` : ""}
             </div>
 
             <h1>
@@ -1572,32 +1570,42 @@ function App() {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="generate-button"
-            onClick={
-              handleGenerate
-            }
-            disabled={
-              generating ||
-              totalPriorities ===
-                0
-            }
-          >
-            {generating ? (
-              <>
-                <span className="button-spinner" />
-                Generating...
-              </>
-            ) : (
-              <>
-                Generate timetable
-                <span className="button-arrow">
-                  →
-                </span>
-              </>
-            )}
-          </button>
+          <div className="header-actions">
+            <button
+              type="button"
+              className="generate-button"
+              onClick={
+                handleGenerate
+              }
+              disabled={
+                generating ||
+                totalPriorities ===
+                  0
+              }
+            >
+              {generating ? (
+                <>
+                  <span className="button-spinner" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  Generate timetable
+                  <span className="button-arrow">
+                    →
+                  </span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className="logout-button"
+              onClick={onLogout}
+            >
+              Log out
+            </button>
+          </div>
         </header>
 
         {status && (
@@ -1644,6 +1652,55 @@ function App() {
       </main>
     </div>
   );
+}
+
+// =========================================================
+// APP (auth gate)
+//
+// Holds the logged-in student's session, restores it from a
+// saved token on refresh, and renders either the Login screen
+// or the Dashboard.
+// =========================================================
+
+function App() {
+  const [student, setStudent] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) {
+      setCheckingSession(false);
+      return;
+    }
+
+    getMe()
+      .then((data) => setStudent(data))
+      .catch(() => {
+        // Token missing/expired/invalid — clear it and fall back to login.
+        localStorage.removeItem(TOKEN_KEY);
+      })
+      .finally(() => setCheckingSession(false));
+  }, []);
+
+  const handleAuthenticated = ({ token, student: authedStudent }) => {
+    localStorage.setItem(TOKEN_KEY, token);
+    setStudent(authedStudent);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    setStudent(null);
+  };
+
+  if (checkingSession) {
+    return <div className="session-loading">Loading SeatSure...</div>;
+  }
+
+  if (!student) {
+    return <Login onAuthenticated={handleAuthenticated} />;
+  }
+
+  return <Dashboard student={student} onLogout={handleLogout} />;
 }
 
 export default App;
