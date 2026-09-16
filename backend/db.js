@@ -6,7 +6,7 @@ const mysql = require("mysql2/promise");
 const pool = mysql.createPool({
   host: "localhost",
   user: "root",
-  password: "nishi110411", // set your MySQL password here if any
+  password: process.env.DB_PASSWORD, // set your MySQL password here if any
   database: "seatsure",
   waitForConnections: true,
   connectionLimit: 10,
