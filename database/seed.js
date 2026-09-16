@@ -58,7 +58,7 @@ async function seed() {
   const connection = await mysql.createConnection({
     host: "localhost",
     user: "root",
-    password: "", // set your MySQL password here if any
+    password: "nishi110411", // set your MySQL password here if any
     database: "seatsure",
     multipleStatements: true,
   });
