@@ -4,8 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "dev": "concurrently \"node backend/index.js\" \"npm start --prefix frontend\"",
+  "test": "echo \"Error: no test specified\" && exit 1"
+},
+
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ojasjog/SeatSure.git"
@@ -20,5 +22,8 @@
   "homepage": "https://github.com/ojasjog/SeatSure#readme",
   "dependencies": {
     "mysql2": "^3.24.4"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
   }
 }
