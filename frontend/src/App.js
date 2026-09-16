@@ -8,6 +8,9 @@ import {
   TOKEN_KEY,
 } from "./api";
 import Login from "./components/Login";
+import Landing from "./components/Landing";
+import FFCSPage from "./components/FFCSPage";
+import WaitlistPage from "./components/Waitlist";
 import "./App.css";
 
 // =========================================================
@@ -545,7 +548,7 @@ function TimetableResult({
 // MAIN APP
 // =========================================================
 
-function Dashboard({ student, onLogout }) {
+function Dashboard({ student, onLogout, onBack }) {
   const [courses, setCourses] = useState([]);
   const [professors, setProfessors] = useState({});
   const [coursePriorities, setCoursePriorities] =
@@ -1329,11 +1332,11 @@ function Dashboard({ student, onLogout }) {
         );
 
         /*
-         * Exact selected offerings
-         * are preserved here.
-         *
-         * Backend support for these
-         * fields will be added next.
+         * Exact selected offerings (theory_offering_id /
+         * lab_offering_id) are preserved here and saved by the
+         * backend, so timetable generation uses the specific
+         * combo the student picked instead of every offering
+         * that professor teaches for the course.
          */
 
         const preferences = [];
@@ -1573,6 +1576,14 @@ function Dashboard({ student, onLogout }) {
           <div className="header-actions">
             <button
               type="button"
+              className="home-button"
+              onClick={onBack}
+            >
+              ← Home
+            </button>
+
+            <button
+              type="button"
               className="generate-button"
               onClick={
                 handleGenerate
@@ -1665,6 +1676,7 @@ function Dashboard({ student, onLogout }) {
 function App() {
   const [student, setStudent] = useState(null);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [view, setView] = useState("landing"); // "landing" | "preffcs" | "ffcs" | "waitlist"
 
   useEffect(() => {
     const token = localStorage.getItem(TOKEN_KEY);
@@ -1685,11 +1697,13 @@ function App() {
   const handleAuthenticated = ({ token, student: authedStudent }) => {
     localStorage.setItem(TOKEN_KEY, token);
     setStudent(authedStudent);
+    setView("landing");
   };
 
   const handleLogout = () => {
     localStorage.removeItem(TOKEN_KEY);
     setStudent(null);
+    setView("landing");
   };
 
   if (checkingSession) {
@@ -1700,7 +1714,31 @@ function App() {
     return <Login onAuthenticated={handleAuthenticated} />;
   }
 
-  return <Dashboard student={student} onLogout={handleLogout} />;
+  if (view === "preffcs") {
+    return (
+      <Dashboard
+        student={student}
+        onLogout={handleLogout}
+        onBack={() => setView("landing")}
+      />
+    );
+  }
+
+  if (view === "ffcs") {
+    return <FFCSPage onBack={() => setView("landing")} />;
+  }
+
+  if (view === "waitlist") {
+    return <WaitlistPage onBack={() => setView("landing")} />;
+  }
+
+  return (
+    <Landing
+      student={student}
+      onSelect={setView}
+      onLogout={handleLogout}
+    />
+  );
 }
 
 export default App;

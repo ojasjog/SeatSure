@@ -1,0 +1,48 @@
+.stub-shell {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 22px 40px;
+}
+
+.stub-back {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 13px;
+  padding: 0;
+  margin-bottom: 40px;
+}
+
+.stub-back:hover {
+  color: var(--text);
+}
+
+.stub-card {
+  max-width: 480px;
+  margin: 80px auto 0;
+  text-align: center;
+
+  padding: 40px 32px;
+
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.stub-icon {
+  font-size: 28px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.stub-card h1 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
+
+.stub-card p {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.6;
+}

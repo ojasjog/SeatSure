@@ -35,3 +35,12 @@ export const savePreferences = (preferences) =>
 
 export const generateTimetable = () =>
   client.get("/timetable/me").then((r) => r.data);
+
+// ---- FFCS (live) ----
+export const getFFCSOptions = () =>
+  client.get("/ffcs/options").then((r) => r.data);
+
+export const registerOffering = (offeringId) =>
+  client.post("/register", { offering_id: offeringId }).then((r) => r.data);
+
+export const SOCKET_URL = "http://localhost:5000";

@@ -798,6 +798,34 @@ input {
   font-size: 14px;
 }
 
+.home-button,
+.logout-button {
+  height: 38px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0 16px;
+
+  background: var(--surface);
+  color: var(--text-soft);
+
+  border: 1px solid var(--line-dark);
+  border-radius: 7px;
+
+  font-size: 12px;
+  font-weight: 600;
+
+  cursor: pointer;
+}
+
+.home-button:hover,
+.logout-button:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
 .button-spinner {
   width: 12px;
   height: 12px;
