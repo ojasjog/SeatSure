@@ -9,6 +9,7 @@ import {
 } from "./api";
 import Login from "./components/Login";
 import Landing from "./components/Landing";
+import TimetableGrid from "./components/TimetableGrid";
 import FFCSPage from "./components/FFCSPage";
 import WaitlistPage from "./components/Waitlist";
 import "./App.css";
@@ -530,16 +531,8 @@ function TimetableResult({
         </div>
       </div>
 
-      <div className="timetable-placeholder">
-        <div className="placeholder-title">
-          Timetable grid
-        </div>
+      <TimetableGrid selections={selections} />
 
-        <div className="placeholder-text">
-          Your generated timetable
-          will appear here.
-        </div>
-      </div>
     </div>
   );
 }

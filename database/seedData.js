@@ -403,8 +403,8 @@ const COURSES = {
       { f: "ARUN KUMAR G", slot: "L37+L38+L51+L52", venue: "PRP353" },
     ]
   },
-  QQ: {
-    code: "QQ", name: "QQ Skills", credits: 1,
+  QQ_TIME: {
+    code: "QQ_TIME", name: "QQ Skills (TIME)", credits: 1,
     theory: [
       { f: "TIME", slot: "D1+TD1", venue: "PRP268" }, { f: "TIME", slot: "D2+TD2", venue: "PRP267" },
       { f: "TIME", slot: "D1+TD1", venue: "PRP274" }, { f: "TIME", slot: "D2+TD2", venue: "PRP274" },
@@ -412,32 +412,56 @@ const COURSES = {
       { f: "TIME", slot: "D1+TD1", venue: "PRP378" }, { f: "TIME", slot: "D2+TD2", venue: "PRP378" },
       { f: "TIME", slot: "E1+TE1", venue: "SMV116" }, { f: "TIME", slot: "E2+TE2", venue: "SMV101" },
       { f: "TIME", slot: "E1+TE1", venue: "TT204" }, { f: "TIME", slot: "E2+TE2", venue: "TT204" },
+    ],
+    lab: [],
+  },
+  QQ_ETHNUS: {
+    code: "QQ_ETHNUS", name: "QQ Skills (Ethnus)", credits: 1,
+    theory: [
       { f: "ETHNUS", slot: "D1+TD1", venue: "PRP372" }, { f: "ETHNUS", slot: "D2+TD2", venue: "PRP372" },
       { f: "ETHNUS", slot: "D1+TD1", venue: "PRP371" }, { f: "ETHNUS", slot: "D2+TD2", venue: "PRP371" },
       { f: "ETHNUS", slot: "D1+TD1", venue: "PRP275" }, { f: "ETHNUS", slot: "D2+TD2", venue: "PRP275" },
       { f: "ETHNUS", slot: "E1+TE1", venue: "MB211" }, { f: "ETHNUS", slot: "E2+TE2", venue: "MB211" },
       { f: "ETHNUS", slot: "E1+TE1", venue: "SJT222" }, { f: "ETHNUS", slot: "E2+TE2", venue: "SJT222" },
+    ],
+    lab: [],
+  },
+  QQ_FACE: {
+    code: "QQ_FACE", name: "QQ Skills (FACE)", credits: 1,
+    theory: [
       { f: "FACE", slot: "D1+TD1", venue: "PRP464" }, { f: "FACE", slot: "D2+TD2", venue: "PRP464" },
       { f: "FACE", slot: "D1+TD1", venue: "PRP472" }, { f: "FACE", slot: "D2+TD2", venue: "PRP472" },
       { f: "FACE", slot: "D1+TD1", venue: "PRP465" }, { f: "FACE", slot: "D2+TD2", venue: "PRP465" },
       { f: "FACE", slot: "E1+TE1", venue: "MB212" }, { f: "FACE", slot: "E2+TE2", venue: "MB212" },
       { f: "FACE", slot: "E1+TE1", venue: "SJT215" }, { f: "FACE", slot: "E2+TE2", venue: "SJT215" },
+    ],
+    lab: [],
+  },
+  QQ_SIXPHRASE: {
+    code: "QQ_SIXPHRASE", name: "QQ Skills (SixPhrase)", credits: 1,
+    theory: [
       { f: "SIXPHRASE", slot: "D1+TD1", venue: "PRP576" }, { f: "SIXPHRASE", slot: "D2+TD2", venue: "PRP576" },
       { f: "SIXPHRASE", slot: "D1+TD1", venue: "PRP568" }, { f: "SIXPHRASE", slot: "D2+TD2", venue: "PRP568" },
       { f: "SIXPHRASE", slot: "D1+TD1", venue: "PRP575" }, { f: "SIXPHRASE", slot: "D2+TD2", venue: "PRP575" },
       { f: "SIXPHRASE", slot: "E1+TE1", venue: "SJT221" }, { f: "SIXPHRASE", slot: "E2+TE2", venue: "SJT221" },
       { f: "SIXPHRASE", slot: "E1+TE1", venue: "PRP426" }, { f: "SIXPHRASE", slot: "E2+TE2", venue: "PRP426" },
     ],
-    lab: []
+    lab: [],
   },
-  HSM: {
-    code: "HSM", name: "HSM Elective", credits: 3,
+  BAHUM109: {
+    code: "BAHUM109", name: "Sociology", credits: 3,
     theory: [
       { f: "SREYA SEN", slot: "G2+TG2", venue: "SJT602A" },
       { f: "KUBENDRAN A", slot: "C2+TC2", venue: "TT621" },
       { f: "BALAMURUGAN J", slot: "G1+TG1", venue: "PRP465" },
       { f: "RAHUL SHUKLA", slot: "C2+TC2", venue: "SJT709" },
       { f: "ABHIJIT DASGUPTA", slot: "C2+TC2", venue: "SJT607" },
+    ],
+    lab: [],
+  },
+  BAHUM110: {
+    code: "BAHUM110", name: "Sustainability", credits: 3,
+    theory: [
       { f: "RASHMI M", slot: "C2+TC2", venue: "PRP772" },
       { f: "RASHMI M", slot: "G2+TG2", venue: "PRP575" },
       { f: "RASHMI M", slot: "G1+TG1", venue: "PRP575" },
@@ -446,20 +470,32 @@ const COURSES = {
       { f: "SREYA SEN", slot: "C1+TC1", venue: "PRP378" },
       { f: "RAHUL SHUKLA", slot: "G2+TG2", venue: "SJT222" },
       { f: "RAHUL SHUKLA", slot: "G1+TG1", venue: "PRP569" },
+    ],
+    lab: [],
+  },
+  BAHUM111: {
+    code: "BAHUM111", name: "Psychology I", credits: 3,
+    theory: [
       { f: "TANU KUKREJA", slot: "C2+TC2", venue: "TT204" },
       { f: "JENEEFER JEBA RAJA SELVI N", slot: "G1+TG1", venue: "SJT324" },
       { f: "TONY P JOSE", slot: "G2+TG2", venue: "SJT617" },
       { f: "TONY P JOSE", slot: "G1+TG1", venue: "PRP471" },
       { f: "MOHD OWAIS KHAN", slot: "G1+TG1", venue: "PRP568" },
       { f: "MOHD OWAIS KHAN", slot: "C2+TC2", venue: "SJT619" },
+    ],
+    lab: [],
+  },
+  BAHUM112: {
+    code: "BAHUM112", name: "Psychology II", credits: 3,
+    theory: [
       { f: "TONY P JOSE", slot: "C2+TC2", venue: "SJT521" },
       { f: "BHUVANESWARI M", slot: "G2+TG2", venue: "SMV121" },
       { f: "BHUVANESWARI M", slot: "G1+TG1", venue: "GDNG07" },
     ],
-    lab: []
+    lab: [],
   },
-  LANG: {
-    code: "LANG", name: "Language", credits: 2,
+  LANG_SPANISH: {
+    code: "SPAN101", name: "Spanish", credits: 2,
     theory: [
       { f: "NUPUR MANASI", slot: "TDD2", venue: "SJT105" },
       { f: "BAISHALI CHOUDHURI", slot: "TAA1", venue: "SJT127" },
@@ -468,6 +504,20 @@ const COURSES = {
       { f: "SHILPI GUPTA", slot: "TCC1", venue: "SJT115" },
       { f: "SABYASACHI MISHRA", slot: "TCC1", venue: "SJT118" },
       { f: "GAURAV SUSHANT", slot: "TCC2", venue: "SJT113" },
+    ],
+    lab: [
+      { f: "BAISHALI CHOUDHURI", slot: "L13+L14", venue: "TT318" },
+      { f: "BAISHALI CHOUDHURI", slot: "L53+L54", venue: "PRP555" },
+      { f: "NUPUR MANASI", slot: "L19+L20", venue: "PRP555" },
+      { f: "ATUL KUMAR", slot: "L9+L10", venue: "PRP555" },
+      { f: "SHILPI GUPTA", slot: "L51+L52", venue: "PRP555" },
+      { f: "SABYASACHI MISHRA", slot: "L57+L58", venue: "PRP555" },
+      { f: "GAURAV SUSHANT", slot: "L3+L4", venue: "PRP555" },
+    ],
+  },
+  LANG_GERMAN: {
+    code: "GER101", name: "German", credits: 2,
+    theory: [
       { f: "DHANANJAY KUMAR", slot: "TBB2", venue: "SJT105" },
       { f: "DHANANJAY KUMAR", slot: "TG2", venue: "TT404" },
       { f: "ARATI KUMARI", slot: "TAA2", venue: "SJT124" },
@@ -478,13 +528,6 @@ const COURSES = {
       { f: "AMIT KUMAR SAINI", slot: "TE1", venue: "SJT508" },
     ],
     lab: [
-      { f: "BAISHALI CHOUDHURI", slot: "L13+L14", venue: "TT318" },
-      { f: "BAISHALI CHOUDHURI", slot: "L53+L54", venue: "PRP555" },
-      { f: "NUPUR MANASI", slot: "L19+L20", venue: "PRP555" },
-      { f: "ATUL KUMAR", slot: "L9+L10", venue: "PRP555" },
-      { f: "SHILPI GUPTA", slot: "L51+L52", venue: "PRP555" },
-      { f: "SABYASACHI MISHRA", slot: "L57+L58", venue: "PRP555" },
-      { f: "GAURAV SUSHANT", slot: "L3+L4", venue: "PRP555" },
       { f: "DHANANJAY KUMAR", slot: "L1+L2", venue: "PRP555" },
       { f: "DHANANJAY KUMAR", slot: "L15+L16", venue: "TT116" },
       { f: "ARATI KUMARI", slot: "L15+L16", venue: "PRP555" },
@@ -496,8 +539,8 @@ const COURSES = {
       { f: "AMIT KUMAR SAINI", slot: "L21+L22", venue: "PRP555" },
       { f: "AMIT KUMAR SAINI", slot: "L41+L42", venue: "PRP555" },
       { f: "AMIT KUMAR SAINI", slot: "L47+L48", venue: "PRP555" },
-    ]
-  }
+    ],
+  },
 };
 
 module.exports = {

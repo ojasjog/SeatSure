@@ -17,7 +17,6 @@ const PORT = 5000;
 // ------------------------------------------------------------
 // POST /api/auth/signup
 // Body: { username, password, name, reg_no, branch, semester }
-// Creates a User (role=student) + linked Student row, returns a JWT.
 // ------------------------------------------------------------
 app.post("/api/auth/signup", async (req, res) => {
   const { username, password, name, reg_no, branch, semester } = req.body;
@@ -102,7 +101,6 @@ app.post("/api/auth/signup", async (req, res) => {
 
 // ------------------------------------------------------------
 // POST /api/auth/login
-// Body: { username, password }
 // ------------------------------------------------------------
 app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body;
@@ -151,7 +149,7 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /api/auth/me - return the currently logged-in student
+// GET /api/auth/me
 // ------------------------------------------------------------
 app.get("/api/auth/me", authenticateToken, async (req, res) => {
   try {
@@ -219,7 +217,7 @@ app.get("/api/offerings/:courseId", async (req, res) => {
 // ------------------------------------------------------------
 app.post("/api/register", authenticateToken, requireStudent, async (req, res) => {
   const { offering_id } = req.body;
-  const student_id = req.user.student_id; // trust the token, not the client
+  const student_id = req.user.student_id;
 
   if (!offering_id) {
     return res.status(400).json({ error: "offering_id is required" });
@@ -320,7 +318,7 @@ app.post("/api/register", authenticateToken, requireStudent, async (req, res) =>
 // ------------------------------------------------------------
 app.post("/api/preferences", authenticateToken, requireStudent, async (req, res) => {
   const { preferences } = req.body;
-  const student_id = req.user.student_id; // trust the token, not the client
+  const student_id = req.user.student_id;
   if (!Array.isArray(preferences)) {
     return res.status(400).json({ error: "preferences[] is required" });
   }
@@ -329,12 +327,20 @@ app.post("/api/preferences", authenticateToken, requireStudent, async (req, res)
   try {
     await connection.query(`DELETE FROM StudentPreference WHERE student_id = ?`, [student_id]);
     for (const pref of preferences) {
-      await connection.query(
-        `INSERT INTO StudentPreference (student_id, course_id, professor_id, priority_rank)
-         VALUES (?, ?, ?, ?)`,
-        [student_id, pref.course_id, pref.professor_id, pref.priority_rank]
-      );
-    }
+  await connection.query(
+    `INSERT INTO StudentPreference
+       (student_id, course_id, professor_id, theory_offering_id, lab_offering_id, priority_rank)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      student_id,
+      pref.course_id,
+      pref.professor_id,
+      pref.theory_offering_id || null,
+      pref.lab_offering_id || null,
+      pref.priority_rank,
+    ]
+  );
+}
     res.json({ status: "saved", count: preferences.length });
   } catch (err) {
     console.error(err);
@@ -356,7 +362,6 @@ app.get("/api/preferences/:studentId", authenticateToken, async (req, res) => {
   ) {
     return res.status(403).json({ error: "You can only view your own preferences" });
   }
-
   try {
     const [rows] = await pool.query(
       `SELECT sp.course_id, c.course_name, sp.professor_id, p.name AS professor_name,
@@ -421,10 +426,12 @@ app.get("/api/timetable/:studentId", authenticateToken, async (req, res) => {
     return res.status(403).json({ error: "You can only generate your own timetable" });
   }
 
-  try {
-    // 1. Get student's ranked preferences, grouped by course
+    try {
+    // 1. Get student's ranked preferences, grouped by course.
+    // Each preference now carries the EXACT theory/lab offering ids
+    // the student picked, not just a professor.
     const [prefRows] = await pool.query(
-      `SELECT course_id, professor_id, priority_rank
+      `SELECT course_id, professor_id, theory_offering_id, lab_offering_id, priority_rank
        FROM StudentPreference
        WHERE student_id = ?
        ORDER BY course_id, priority_rank`,
@@ -435,53 +442,90 @@ app.get("/api/timetable/:studentId", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "No preferences set for this student" });
     }
 
-    // Group: courseId -> [{ professor_id, priority_rank }, ...] (already rank-ordered)
+    // Group: courseId -> [{ professor_id, theory_offering_id, lab_offering_id, priority_rank }, ...]
     const courseMap = new Map();
     for (const row of prefRows) {
       if (!courseMap.has(row.course_id)) courseMap.set(row.course_id, []);
       courseMap.get(row.course_id).push({
         professor_id: row.professor_id,
+        theory_offering_id: row.theory_offering_id,
+        lab_offering_id: row.lab_offering_id,
         priority_rank: row.priority_rank,
       });
     }
     const courseIds = Array.from(courseMap.keys());
 
-    // 2. For each (course, professor), fetch their offerings + slot_ids
-    // candidateData[courseId][professorId] = { offeringIds: [], slotIds: Set, slotCodes: Set, courseName, professorName }
-    const candidateData = {};
-    for (const courseId of courseIds) {
-      candidateData[courseId] = {};
-      const professorIds = courseMap.get(courseId).map((p) => p.professor_id);
+        // 2. For each preference, build its EXACT section using the
+    // stored theory_offering_id + lab_offering_id — no more
+    // substituting a different section from the same professor.
+    const candidateSections = {};
+    const courseProfessorNames = {};
+    const courseNameCache = {};
 
-      const [offRows] = await pool.query(
+    const allOfferingIds = [];
+    for (const courseId of courseIds) {
+      for (const pref of courseMap.get(courseId)) {
+        if (pref.theory_offering_id) allOfferingIds.push(pref.theory_offering_id);
+        if (pref.lab_offering_id) allOfferingIds.push(pref.lab_offering_id);
+      }
+    }
+
+    let offeringSlotRows = [];
+    if (allOfferingIds.length > 0) {
+      const [rows] = await pool.query(
         `SELECT co.offering_id, co.professor_id, p.name AS professor_name,
-                c.course_name, os.slot_id, s.slot_code
+                c.course_id, c.course_name, os.slot_id, s.slot_code
          FROM CourseOffering co
          JOIN Professor p ON co.professor_id = p.professor_id
          JOIN Course c ON co.course_id = c.course_id
          JOIN OfferingSlot os ON co.offering_id = os.offering_id
          JOIN Slot s ON os.slot_id = s.slot_id
-         WHERE co.course_id = ? AND co.professor_id IN (${professorIds.map(() => "?").join(",")})`,
-        [courseId, ...professorIds]
+         WHERE co.offering_id IN (${allOfferingIds.map(() => "?").join(",")})`,
+        allOfferingIds
       );
+      offeringSlotRows = rows;
+    }
 
-      for (const row of offRows) {
-        if (!candidateData[courseId][row.professor_id]) {
-          candidateData[courseId][row.professor_id] = {
-            offeringIds: new Set(),
-            slotIds: new Set(),
-            slotCodes: new Set(),
-            courseName: row.course_name,
-            professorName: row.professor_name,
-          };
+    // offeringData[offering_id] = { slotIds: Set, slotCodes: Set }
+    const offeringData = {};
+    for (const row of offeringSlotRows) {
+      if (!offeringData[row.offering_id]) {
+        offeringData[row.offering_id] = { slotIds: new Set(), slotCodes: new Set() };
+      }
+      offeringData[row.offering_id].slotIds.add(row.slot_id);
+      offeringData[row.offering_id].slotCodes.add(row.slot_code);
+      courseProfessorNames[row.course_id] = courseProfessorNames[row.course_id] || {};
+      courseProfessorNames[row.course_id][row.professor_id] = row.professor_name;
+      courseNameCache[row.course_id] = row.course_name;
+    }
+
+    for (const courseId of courseIds) {
+      candidateSections[courseId] = {};
+      for (const pref of courseMap.get(courseId)) {
+        const slotIds = new Set();
+        const slotCodes = new Set();
+        const offeringIds = new Set();
+
+        if (pref.theory_offering_id && offeringData[pref.theory_offering_id]) {
+          offeringData[pref.theory_offering_id].slotIds.forEach((s) => slotIds.add(s));
+          offeringData[pref.theory_offering_id].slotCodes.forEach((s) => slotCodes.add(s));
+          offeringIds.add(pref.theory_offering_id);
         }
-        candidateData[courseId][row.professor_id].offeringIds.add(row.offering_id);
-        candidateData[courseId][row.professor_id].slotIds.add(row.slot_id);
-        candidateData[courseId][row.professor_id].slotCodes.add(row.slot_code);
+        if (pref.lab_offering_id && offeringData[pref.lab_offering_id]) {
+          offeringData[pref.lab_offering_id].slotIds.forEach((s) => slotIds.add(s));
+          offeringData[pref.lab_offering_id].slotCodes.forEach((s) => slotCodes.add(s));
+          offeringIds.add(pref.lab_offering_id);
+        }
+
+        candidateSections[courseId][pref.professor_id] = [
+          { offeringIds, slotIds, slotCodes },
+        ];
       }
     }
 
-    // 3. Backtracking search across courses
+    // 3. Backtracking search across courses. For each course, try
+    // professors in priority order; for each professor, try each of
+    // their distinct sections as an alternative.
     const results = [];
     const MAX_RESULTS = 10;
 
@@ -505,40 +549,38 @@ app.get("/api/timetable/:studentId", authenticateToken, async (req, res) => {
       }
 
       const courseId = courseIds[index];
-      const candidates = courseMap.get(courseId); // rank-ordered
+      const candidates = courseMap.get(courseId); // rank-ordered professors
 
       for (const cand of candidates) {
-        const data = candidateData[courseId][cand.professor_id];
-        if (!data) continue; // no offerings found for this professor
+        const sections = candidateSections[courseId][cand.professor_id] || [];
 
-        // Check clash: does any slot of this professor's offerings
-        // already exist in chosenSlotIds?
-        let clash = false;
-        for (const slotId of data.slotIds) {
-          if (chosenSlotIds.has(slotId)) {
-            clash = true;
-            break;
+        for (const section of sections) {
+          let clash = false;
+          for (const slotId of section.slotIds) {
+            if (chosenSlotIds.has(slotId)) {
+              clash = true;
+              break;
+            }
           }
+          if (clash) continue;
+
+          const newSlotIds = new Set(chosenSlotIds);
+          section.slotIds.forEach((s) => newSlotIds.add(s));
+
+          chosen.push({
+            course_id: courseId,
+            professor_id: cand.professor_id,
+            courseName: courseNameCache[courseId],
+            professorName: courseProfessorNames[courseId][cand.professor_id],
+            offeringIds: section.offeringIds,
+            slotCodes: section.slotCodes,
+            priority_rank: cand.priority_rank,
+          });
+
+          backtrack(index + 1, newSlotIds, chosen, rankSum + cand.priority_rank);
+
+          chosen.pop();
         }
-        if (clash) continue;
-
-        // No clash -> choose this professor, recurse
-        const newSlotIds = new Set(chosenSlotIds);
-        data.slotIds.forEach((s) => newSlotIds.add(s));
-
-        chosen.push({
-          course_id: courseId,
-          professor_id: cand.professor_id,
-          courseName: data.courseName,
-          professorName: data.professorName,
-          offeringIds: data.offeringIds,
-          slotCodes: data.slotCodes,
-          priority_rank: cand.priority_rank,
-        });
-
-        backtrack(index + 1, newSlotIds, chosen, rankSum + cand.priority_rank);
-
-        chosen.pop();
       }
     }
 
@@ -547,7 +589,46 @@ app.get("/api/timetable/:studentId", authenticateToken, async (req, res) => {
     // Sort by best (lowest) total rank sum = best priority match
     results.sort((a, b) => a.rankSum - b.rankSum);
 
-    res.json({ count: results.length, timetables: results });
+    // If nothing was found, pinpoint which pair of courses clash,
+    // checking each course's top (rank 1) professor's best section.
+    let diagnostic = null;
+    if (results.length === 0) {
+      const top = courseIds.map((courseId) => {
+        const rank1Prof = courseMap.get(courseId)[0];
+        const sections = candidateSections[courseId][rank1Prof.professor_id] || [];
+        const bestSection = sections[0]; // just show the first section as representative
+        return {
+          courseId,
+          courseName: courseNameCache[courseId],
+          professorName: courseProfessorNames[courseId][rank1Prof.professor_id],
+          slotIds: bestSection?.slotIds || new Set(),
+          slotCodes: bestSection?.slotCodes || new Set(),
+        };
+      });
+
+      const clashes = [];
+      for (let i = 0; i < top.length; i++) {
+        for (let j = i + 1; j < top.length; j++) {
+          const shared = [...top[i].slotIds].filter((id) => top[j].slotIds.has(id));
+          if (shared.length > 0) {
+            const sharedCodes = [...top[i].slotCodes].filter((code) =>
+              [...top[j].slotCodes].includes(code)
+            );
+            clashes.push({
+              course_a: top[i].courseName,
+              professor_a: top[i].professorName,
+              course_b: top[j].courseName,
+              professor_b: top[j].professorName,
+              shared_slot_codes: sharedCodes,
+            });
+          }
+        }
+      }
+
+      diagnostic = { usingTopChoiceOnly: true, clashes };
+    }
+
+    res.json({ count: results.length, timetables: results, diagnostic });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to generate timetable" });
