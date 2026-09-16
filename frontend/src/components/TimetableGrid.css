@@ -1,0 +1,333 @@
+.timetable-wrapper {
+  width: 100%;
+  background: #ffffff;
+}
+
+.timetable-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #d2d2cb transparent;
+}
+
+.timetable-scroll::-webkit-scrollbar {
+  height: 7px;
+}
+
+.timetable-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timetable-scroll::-webkit-scrollbar-thumb {
+  background: #d2d2cb;
+  border-radius: 10px;
+}
+
+.timetable {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  table-layout: fixed;
+
+  color: #181817;
+}
+
+/* =========================
+   HEADER
+   ========================= */
+
+.tt-day-header {
+  width: 62px;
+  background: #f7f7f4;
+  border-right: 1px solid #dfdfd9;
+  border-bottom: 1px solid #dfdfd9;
+
+  padding: 10px 6px;
+
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 1px;
+  color: #77776f;
+}
+
+.tt-column-header {
+  height: 64px;
+
+  background: #f7f7f4;
+
+  border-right: 1px solid #e3e3dd;
+  border-bottom: 1px solid #dfdfd9;
+
+  padding: 7px 5px;
+
+  text-align: center;
+  vertical-align: middle;
+}
+
+.tt-column-label {
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.2px;
+  color: #292925;
+}
+
+.tt-column-time {
+  margin-top: 3px;
+
+  font-size: 8px;
+  font-weight: 500;
+
+  color: #92928a;
+}
+
+.tt-column-slots {
+  margin-top: 5px;
+
+  font-size: 7px;
+  font-weight: 700;
+
+  letter-spacing: 0.45px;
+
+  color: #b0b0a8;
+}
+
+/* =========================
+   BREAK
+   ========================= */
+
+.tt-break-header {
+  width: 38px;
+
+  background: #efefeb;
+
+  border-right: 1px solid #ddddD6;
+  border-bottom: 1px solid #dfdfd9;
+
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+
+  font-size: 7px;
+  font-weight: 750;
+  letter-spacing: 1.5px;
+
+  color: #9a9a92;
+}
+
+.tt-break-cell {
+  width: 38px;
+
+  background: #f1f1ed;
+
+  border-right: 1px solid #ddddD6;
+
+  position: relative;
+}
+
+.tt-break-cell::after {
+  content: "";
+
+  position: absolute;
+
+  width: 1px;
+  height: 55%;
+
+  top: 22%;
+  left: 50%;
+
+  background: #d8d8d1;
+}
+
+/* =========================
+   DAY
+   ========================= */
+
+.tt-day-cell {
+  width: 62px;
+
+  background: #f8f8f5;
+
+  border-right: 1px solid #dfdfd9;
+  border-bottom: 1px solid #dfdfd9;
+
+  text-align: center;
+  vertical-align: middle;
+
+  font-size: 9px;
+  font-weight: 750;
+
+  letter-spacing: 0.8px;
+
+  color: #55554f;
+}
+
+/* =========================
+   CELLS
+   ========================= */
+
+.tt-empty-cell,
+.tt-filled-cell {
+  height: 66px;
+
+  border-right: 1px solid #e5e5df;
+  border-bottom: 1px solid #e5e5df;
+
+  text-align: center;
+  vertical-align: middle;
+
+  padding: 5px;
+}
+
+.tt-empty-cell {
+  background: #fdfdfb;
+}
+
+.tt-empty-cell:hover {
+  background: #fafaf7;
+}
+
+.tt-filled-cell {
+  position: relative;
+
+  border-width: 1px;
+  border-style: solid;
+
+  padding: 5px 4px;
+
+  transition: filter 120ms ease;
+}
+
+.tt-filled-cell:hover {
+  filter: brightness(0.98);
+}
+
+/* =========================
+   SLOT CONTENT
+   ========================= */
+
+.tt-slot-code {
+  display: block;
+
+  font-size: 8px;
+  font-weight: 700;
+
+  letter-spacing: 0.25px;
+
+  color: #c0c0b8;
+}
+
+.tt-slot-code.filled {
+  font-size: 8px;
+}
+
+.tt-course-name {
+  margin-top: 4px;
+
+  font-size: 9px;
+  line-height: 1.15;
+
+  font-weight: 700;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-professor {
+  margin-top: 4px;
+
+  font-size: 8px;
+  line-height: 1;
+
+  color: #77776f;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-type {
+  margin-top: 4px;
+
+  font-size: 6px;
+  font-weight: 750;
+
+  letter-spacing: 0.7px;
+
+  color: #999990;
+}
+
+.tt-empty-slot {
+  font-size: 8px;
+  color: #deded8;
+}
+
+/* =========================
+   BOTTOM KEY
+   ========================= */
+
+.timetable-key {
+  height: 39px;
+
+  display: flex;
+  align-items: center;
+
+  gap: 17px;
+
+  padding: 0 12px;
+
+  border-top: 1px solid #e5e5df;
+
+  background: #fafaf8;
+
+  font-size: 8px;
+  color: #77776f;
+}
+
+.timetable-key span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.timetable-key i {
+  display: block;
+
+  width: 7px;
+  height: 7px;
+
+  border-radius: 2px;
+}
+
+.key-theory {
+  background: #c4bba8;
+}
+
+.key-lab {
+  background: #a9b3a1;
+}
+
+.key-note {
+  margin-left: auto;
+
+  color: #aaa9a1;
+}
+
+/* =========================
+   RESPONSIVE
+   ========================= */
+
+@media (max-width: 800px) {
+  .timetable {
+    min-width: 1050px;
+  }
+
+  .tt-empty-cell,
+  .tt-filled-cell {
+    height: 62px;
+  }
+
+  .tt-course-name {
+    font-size: 8px;
+  }
+}
