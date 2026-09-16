@@ -12,7 +12,16 @@ import Landing from "./components/Landing";
 import TimetableGrid from "./components/TimetableGrid";
 import FFCSPage from "./components/FFCSPage";
 import WaitlistPage from "./components/Waitlist";
-import "./App.css";
+import "./App.css";const COURSE_COLORS = [
+  "#D7C6A7", "#BCCAB8", "#D8BDB8", "#CAC9C1",
+  "#DCC6A5", "#C9C8B1", "#D4C8B5",
+];
+
+function courseColor(index) {
+  return COURSE_COLORS[index % COURSE_COLORS.length];
+}
+
+
 
 // =========================================================
 // SLOT HELPERS
@@ -481,21 +490,13 @@ function TimetableResult({
       <div className="result-stats">
         <div className="stat">
           <span className="stat-value">
+            {selections.filter((s) => s.priority_rank === 1).length}
+            /
             {selections.length}
           </span>
 
           <span className="stat-label">
-            Courses
-          </span>
-        </div>
-
-        <div className="stat">
-          <span className="stat-value">
-            {timetable?.rankSum ?? "—"}
-          </span>
-
-          <span className="stat-label">
-            Priority score
+            Got 1st choice
           </span>
         </div>
       </div>
@@ -520,9 +521,9 @@ function TimetableResult({
                   {selection.professor_name}
                 </div>
 
-                {selection.slot_codes && (
+                {selection.slot_codes && selection.slot_codes.length > 0 && (
                   <div className="assigned-slots">
-                    {selection.slot_codes}
+                    {selection.slot_codes.join(" + ")}
                   </div>
                 )}
               </div>
@@ -530,6 +531,37 @@ function TimetableResult({
           )}
         </div>
       </div>
+
+      <div className="assigned-faculty" style={{ marginTop: "12px" }}>
+  <div className="assigned-title">
+    COLOR KEY
+  </div>
+  <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", padding: "10px 13px" }}>
+    {selections.map((selection, index) => (
+      <div
+        key={selection.course_id}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          fontSize: "9px",
+          color: "var(--text-soft)",
+        }}
+      >
+        <span
+          style={{
+            width: "9px",
+            height: "9px",
+            borderRadius: "2px",
+            background: courseColor(index),
+            display: "inline-block",
+          }}
+        />
+        {selection.course_name}
+      </div>
+    ))}
+  </div>
+</div>
 
       <TimetableGrid selections={selections} />
 
