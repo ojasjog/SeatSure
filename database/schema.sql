@@ -13,7 +13,9 @@ DROP TABLE IF EXISTS Waitlist;
 DROP TABLE IF EXISTS Enrollment;
 DROP TABLE IF EXISTS RegistrationProgress;
 DROP TABLE IF EXISTS StudentPreference;
+DROP TABLE IF EXISTS OfferingSlot;
 DROP TABLE IF EXISTS CourseOffering;
+DROP TABLE IF EXISTS SlotSchedule;
 DROP TABLE IF EXISTS Slot;
 DROP TABLE IF EXISTS Course;
 DROP TABLE IF EXISTS Professor;
@@ -65,32 +67,62 @@ CREATE TABLE Course (
 );
 
 -- ============================================================
--- 5. Slot (unique slot codes with day/time)
+-- 5. Slot (ATOMIC slot codes only, e.g. "A1", "TA1", "L1", "L18")
+-- A combined code like "A2+TA2" is represented as TWO Slot rows
+-- linked to one CourseOffering via the OfferingSlot junction table.
 -- ============================================================
 CREATE TABLE Slot (
     slot_id INT AUTO_INCREMENT PRIMARY KEY,
-    slot_code VARCHAR(30) UNIQUE NOT NULL, -- e.g. "A1+TA1", "L3+L4"
-    day_pattern VARCHAR(50), -- e.g. "Mon,Wed" (derived from grid)
-    start_time TIME,
-    end_time TIME
+    slot_code VARCHAR(10) UNIQUE NOT NULL, -- e.g. "A1", "TA1", "L18"
+    slot_type ENUM('theory', 'lab') NOT NULL
 );
 
 -- ============================================================
--- 6. CourseOffering (junction: Course + Professor + Slot + Venue)
+-- 5b. SlotSchedule (1NF fix: a slot code can occur on MULTIPLE
+-- day/time combinations per week, e.g. "A1" = Mon 8:00 AND Wed
+-- 9:00. Storing multiple times in one Slot row would violate 1NF,
+-- so each occurrence gets its own row here.)
+-- ============================================================
+CREATE TABLE SlotSchedule (
+    schedule_id INT AUTO_INCREMENT PRIMARY KEY,
+    slot_id INT NOT NULL,
+    day_of_week ENUM('Mon','Tue','Wed','Thu','Fri','Sat','Sun') NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    FOREIGN KEY (slot_id) REFERENCES Slot(slot_id) ON DELETE CASCADE,
+    UNIQUE KEY unique_slot_day (slot_id, day_of_week)
+);
+
+-- ============================================================
+-- 6. CourseOffering (Course + Professor + Venue; NO direct slot
+-- reference here — see OfferingSlot junction table below)
 -- ============================================================
 CREATE TABLE CourseOffering (
     offering_id INT AUTO_INCREMENT PRIMARY KEY,
     course_id INT NOT NULL,
     professor_id INT NOT NULL,
-    slot_id INT NOT NULL,
     venue VARCHAR(20) NOT NULL,
     course_type ENUM('theory', 'lab') NOT NULL,
     total_seats INT NOT NULL DEFAULT 60,
     seats_remaining INT NOT NULL DEFAULT 60,
     FOREIGN KEY (course_id) REFERENCES Course(course_id) ON DELETE CASCADE,
     FOREIGN KEY (professor_id) REFERENCES Professor(professor_id) ON DELETE CASCADE,
-    FOREIGN KEY (slot_id) REFERENCES Slot(slot_id) ON DELETE CASCADE,
     CHECK (seats_remaining >= 0 AND seats_remaining <= total_seats)
+);
+
+-- ============================================================
+-- 6b. OfferingSlot (junction: M:N between CourseOffering and Slot.
+-- A combined code like "A2+TA2" means this offering occupies BOTH
+-- the A2 slot AND the TA2 slot. This is what makes clash detection
+-- accurate: two offerings clash if they share ANY row here with
+-- the same slot_id.)
+-- ============================================================
+CREATE TABLE OfferingSlot (
+    offering_id INT NOT NULL,
+    slot_id INT NOT NULL,
+    PRIMARY KEY (offering_id, slot_id),
+    FOREIGN KEY (offering_id) REFERENCES CourseOffering(offering_id) ON DELETE CASCADE,
+    FOREIGN KEY (slot_id) REFERENCES Slot(slot_id) ON DELETE CASCADE
 );
 
 -- ============================================================

@@ -1,94 +1,109 @@
 // ============================================================
-// SeatSure - Database Seed Script
-// Reads seedData.js (real VIT course/slot/faculty data) and
-// inserts it into MySQL via mysql2.
+// SeatSure - Database Seed Script (v2: atomic slots)
 //
-// This script demonstrates:
-//  - Phase 6 (DML): structured, programmatic data population
-//  - Phase 9 (Database Connectivity): Node.js <-> MySQL via mysql2
+// Combined slot codes like "A2+TA2" are split into their atomic
+// components ("A2", "TA2"), each stored once in Slot, with all
+// their real day/time occurrences in SlotSchedule. A CourseOffering
+// links to its atomic slots via the OfferingSlot junction table.
+// This makes clash detection accurate: two offerings clash if they
+// share ANY atomic slot_id.
 // ============================================================
 
 const mysql = require("mysql2/promise");
-const { GRID_COLS, DAY_THEORY, COURSES } = require("./seedData");
+const {
+  DAY_THEORY,
+  DAY_LAB,
+  THEORY_COL_TIMES,
+  LAB_COL_TIMES,
+  COURSES,
+} = require("./seedData");
 
-// ------------------------------------------------------------
-// Derive day + start/end time for every theory slot code from
-// the grid definition (GRID_COLS + DAY_THEORY). Lab slot codes
-// (e.g. "L3+L4") are approximated using the lab column times,
-// since exact lab day mapping isn't required for this project's
-// clash-detection scope.
-// ------------------------------------------------------------
-function buildSlotTimeMap() {
-  const map = {}; // slotCode -> { days: Set, start, end }
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
-  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+// Build a map: slot_code -> [{ day, start, end }, ...]
+// (a slot code can legitimately occur on more than one day/time)
+function buildScheduleMap() {
+  const map = {};
+
+  function addOccurrence(code, day, timing) {
+    if (!code || !timing) return;
+    if (!map[code]) map[code] = [];
+    map[code].push({ day, start: timing.start, end: timing.end });
+  }
 
   DAYS.forEach((day) => {
-    DAY_THEORY[day].forEach((slotCode, colIndex) => {
-      if (!slotCode) return;
-      const col = GRID_COLS[colIndex];
-      if (!map[slotCode]) map[slotCode] = { days: new Set(), start: col.time };
-      map[slotCode].days.add(day);
+    DAY_THEORY[day].forEach((code, colIndex) => {
+      addOccurrence(code, day, THEORY_COL_TIMES[colIndex]);
+    });
+    DAY_LAB[day].forEach((code, colIndex) => {
+      addOccurrence(code, day, LAB_COL_TIMES[colIndex]);
     });
   });
 
   return map;
 }
 
-// Convert "8:00" / "14:00" style time strings to MySQL TIME format
-function toMySQLTime(timeStr) {
-  const [h, m] = timeStr.split(":").map(Number);
+function toMySQLTime(hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
 }
 
-// For a given slot string like "A1+TA1" or "L3+L4", extract the
-// FIRST component's day/time info if available. If not found in
-// the theory grid (e.g. pure lab codes), fall back to a generic
-// placeholder time — still unique enough for clash detection by
-// slot_code identity, which is this project's agreed approach.
-function resolveSlotTiming(slotCode, slotTimeMap) {
-  const parts = slotCode.split("+");
-  for (const part of parts) {
-    if (slotTimeMap[part]) {
-      const info = slotTimeMap[part];
-      const days = Array.from(info.days).join(",");
-      const start = toMySQLTime(info.start);
-      // default 1-hour block for theory, 2-hour for lab pairs
-      const isLab = slotCode.startsWith("L");
-      const durationHours = isLab ? 2 : 1;
-      const [h, m] = start.split(":").map(Number);
-      const endH = (h + durationHours) % 24;
-      const end = `${String(endH).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
-      return { days, start, end };
-    }
-  }
-  // fallback if no match found in grid
-  return { days: "Mon", start: "08:00:00", end: "09:00:00" };
+// Split a combined slot string like "A2+TA2" or "L3+L4+L21+L22"
+// into its individual atomic components.
+function splitSlotCode(slotStr) {
+  return slotStr.split("+").map((s) => s.trim());
 }
 
 async function seed() {
   const connection = await mysql.createConnection({
     host: "localhost",
-    user: "root", // change if using a different MySQL user
+    user: "root",
     password: "", // set your MySQL password here if any
     database: "seatsure",
     multipleStatements: true,
   });
 
-  console.log("Connected to MySQL. Starting seed...");
+  console.log("Connected to MySQL. Starting seed (v2: atomic slots)...");
 
-  const slotTimeMap = buildSlotTimeMap();
+  const scheduleMap = buildScheduleMap();
 
-  // Caches to avoid duplicate inserts
   const professorCache = new Map(); // name -> professor_id
-  const slotCache = new Map(); // slot_code -> slot_id
+  const slotCache = new Map(); // atomic slot_code -> slot_id
   const courseCache = new Map(); // course_code -> course_id
+
+  // ---- Helper: get or create an atomic Slot row + its schedule ----
+  async function getOrCreateSlot(atomicCode) {
+    if (slotCache.has(atomicCode)) return slotCache.get(atomicCode);
+
+    const slotType = atomicCode.startsWith("L") ? "lab" : "theory";
+
+    const [result] = await connection.execute(
+      `INSERT INTO Slot (slot_code, slot_type)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE slot_id = LAST_INSERT_ID(slot_id)`,
+      [atomicCode, slotType]
+    );
+    const slotId = result.insertId;
+    slotCache.set(atomicCode, slotId);
+
+    // Insert every real day/time occurrence for this slot code
+    const occurrences = scheduleMap[atomicCode] || [];
+    for (const occ of occurrences) {
+      await connection.execute(
+        `INSERT IGNORE INTO SlotSchedule (slot_id, day_of_week, start_time, end_time)
+         VALUES (?, ?, ?, ?)`,
+        [slotId, occ.day, toMySQLTime(occ.start), toMySQLTime(occ.end)]
+      );
+    }
+
+    return slotId;
+  }
 
   try {
     for (const courseKey of Object.keys(COURSES)) {
       const course = COURSES[courseKey];
 
-      // ---- Insert Course ----
+      // ---- Course ----
       let courseId = courseCache.get(course.code);
       if (!courseId) {
         const [result] = await connection.execute(
@@ -100,14 +115,13 @@ async function seed() {
         console.log(`Inserted course: ${course.code} - ${course.name}`);
       }
 
-      // ---- Insert offerings (theory + lab) ----
       const allOfferings = [
         ...course.theory.map((o) => ({ ...o, type: "theory" })),
         ...course.lab.map((o) => ({ ...o, type: "lab" })),
       ];
 
       for (const offering of allOfferings) {
-        // Professor
+        // ---- Professor ----
         let professorId = professorCache.get(offering.f);
         if (!professorId) {
           const [profResult] = await connection.execute(
@@ -120,28 +134,25 @@ async function seed() {
           professorCache.set(offering.f, professorId);
         }
 
-        // Slot
-        let slotId = slotCache.get(offering.slot);
-        if (!slotId) {
-          const timing = resolveSlotTiming(offering.slot, slotTimeMap);
-          const [slotResult] = await connection.execute(
-            `INSERT INTO Slot (slot_code, day_pattern, start_time, end_time)
-             VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE slot_id = LAST_INSERT_ID(slot_id)`,
-            [offering.slot, timing.days, timing.start, timing.end]
-          );
-          slotId = slotResult.insertId;
-          slotCache.set(offering.slot, slotId);
-        }
-
-        // CourseOffering
-        const totalSeats = 60; // reasonable sample capacity
-        await connection.execute(
+        // ---- CourseOffering (no slot_id here anymore) ----
+        const totalSeats = 60;
+        const [offeringResult] = await connection.execute(
           `INSERT INTO CourseOffering
-             (course_id, professor_id, slot_id, venue, course_type, total_seats, seats_remaining)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [courseId, professorId, slotId, offering.venue, offering.type, totalSeats, totalSeats]
+             (course_id, professor_id, venue, course_type, total_seats, seats_remaining)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [courseId, professorId, offering.venue, offering.type, totalSeats, totalSeats]
         );
+        const offeringId = offeringResult.insertId;
+
+        // ---- Split combined slot code into atomic slots, link via junction ----
+        const atomicCodes = splitSlotCode(offering.slot);
+        for (const atomicCode of atomicCodes) {
+          const slotId = await getOrCreateSlot(atomicCode);
+          await connection.execute(
+            `INSERT IGNORE INTO OfferingSlot (offering_id, slot_id) VALUES (?, ?)`,
+            [offeringId, slotId]
+          );
+        }
       }
 
       console.log(`  -> ${allOfferings.length} offerings inserted for ${course.code}`);
@@ -149,7 +160,7 @@ async function seed() {
 
     console.log("\nSeeding complete.");
     console.log(`Total professors: ${professorCache.size}`);
-    console.log(`Total unique slots: ${slotCache.size}`);
+    console.log(`Total atomic slots: ${slotCache.size}`);
     console.log(`Total courses: ${courseCache.size}`);
   } catch (err) {
     console.error("Seed error:", err);

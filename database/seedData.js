@@ -28,6 +28,47 @@ const DAY_THEORY = {
   Fri: ["E1", "C1", "TA1", "TF1", "TD1", null, "E2", "C2", "TA2", "TF2", "TDD2", null],
 };
 
+// Theory column start times (matches the real VIT grid image)
+// index: 0=P1 ... 4=P5, 5=break(skip), 6=P7 ... 10=P11, 11=break(skip)
+const THEORY_COL_TIMES = [
+  { start: "08:00", end: "08:50" },
+  { start: "09:00", end: "09:50" },
+  { start: "10:00", end: "10:50" },
+  { start: "11:00", end: "11:50" },
+  { start: "12:00", end: "12:50" },
+  null,
+  { start: "14:00", end: "14:50" },
+  { start: "15:00", end: "15:50" },
+  { start: "16:00", end: "16:50" },
+  { start: "17:00", end: "17:50" },
+  { start: "18:00", end: "18:50" },
+  null,
+];
+
+const DAY_LAB = {
+  Mon: ["L1", "L2", "L3", "L4", "L5", "L6", "L31", "L32", "L33", "L34", "L35", "L36"],
+  Tue: ["L7", "L8", "L9", "L10", "L11", "L12", "L37", "L38", "L39", "L40", "L41", "L42"],
+  Wed: ["L13", "L14", "L15", "L16", "L17", "L18", "L43", "L44", "L45", "L46", "L47", "L48"],
+  Thu: ["L19", "L20", "L21", "L22", "L23", "L24", "L49", "L50", "L51", "L52", "L53", "L54"],
+  Fri: ["L25", "L26", "L27", "L28", "L29", "L30", "L55", "L56", "L57", "L58", "L59", "L60"],
+};
+
+// Lab column start/end times (matches the real VIT grid image)
+const LAB_COL_TIMES = [
+  { start: "08:00", end: "08:50" },
+  { start: "08:51", end: "09:40" },
+  { start: "09:51", end: "10:40" },
+  { start: "10:41", end: "11:30" },
+  { start: "11:40", end: "12:30" },
+  { start: "12:31", end: "13:20" },
+  { start: "14:00", end: "14:50" },
+  { start: "14:51", end: "15:40" },
+  { start: "15:51", end: "16:40" },
+  { start: "16:41", end: "17:30" },
+  { start: "17:40", end: "18:30" },
+  { start: "18:31", end: "19:20" },
+];
+
 // Course data: theory/lab arrays with faculty, slot, venue
 const COURSES = {
   BACSE324: {
@@ -459,4 +500,11 @@ const COURSES = {
   }
 };
 
-module.exports = { GRID_COLS, DAY_THEORY, COURSES };
+module.exports = {
+  GRID_COLS,
+  DAY_THEORY,
+  DAY_LAB,
+  THEORY_COL_TIMES,
+  LAB_COL_TIMES,
+  COURSES,
+};
