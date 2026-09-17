@@ -14,6 +14,7 @@ import Landing from "./components/Landing";
 import TimetableGrid from "./components/TimetableGrid";
 import FFCSPage from "./components/FFCSPage";
 import WaitlistPage from "./components/Waitlist";
+import html2canvas from "html2canvas";
 import "./App.css";const COURSE_COLORS = [
   "#D7C6A7", "#BCCAB8", "#D8BDB8", "#CAC9C1",
   "#DCC6A5", "#C9C8B1", "#D4C8B5",
@@ -426,7 +427,20 @@ function TimetableResult({
   const selections =
     timetable?.selections || [];
 
+  const handleDownload = () => {
+    const gridElement = document.getElementById("timetable-grid-capture");
+    if (!gridElement) return;
+
+    html2canvas(gridElement, { backgroundColor: "#ffffff", scale: 2 }).then((canvas) => {
+      const link = document.createElement("a");
+      link.download = `seatsure-timetable-option-${selectedIndex + 1}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    });
+  };
+
   return (
+
     <div className="timetable-result">
 
       <div className="result-topbar">
@@ -486,8 +500,20 @@ function TimetableResult({
           >
             Next →
           </button>
+
+            <button
+            type="button"
+            className="nav-button"
+            onClick={handleDownload}
+          >
+            Download PNG
+          </button>
         </div>
       </div>
+
+      
+
+      
 
       <div className="result-stats">
         <div className="stat">
@@ -1711,7 +1737,7 @@ function Dashboard({ student, onLogout, onBack }) {
               Log out
             </button>
           </div>
-                    
+
         </header>
 
         {status && (

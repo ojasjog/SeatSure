@@ -280,20 +280,6 @@ const COURSE_COLORS = [
   },
 ];
 
-function getShortName(courseName = "") {
-  const words = courseName
-    .split(" ")
-    .filter(Boolean);
-
-  if (words.length <= 2) return courseName;
-
-  return words
-    .slice(0, 4)
-    .map((word) => word[0])
-    .join("")
-    .toUpperCase();
-}
-
 function getFacultyShortName(name = "") {
   const parts = name.trim().split(/\s+/);
 
@@ -382,8 +368,8 @@ export default function TimetableGrid({
   const slotLookup = buildSlotLookup(selections);
 
   return (
-    <div className="timetable-wrapper">
-      <div className="timetable-scroll">
+        <div className="timetable-wrapper" id="timetable-grid-capture">
+        <div className="timetable-scroll">
         <table className="timetable">
           <thead>
             <tr>
