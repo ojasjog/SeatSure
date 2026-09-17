@@ -1625,52 +1625,56 @@ function Dashboard({ student, onLogout, onBack }) {
             </p>
           </div>
 
-    <div className="header-actions">
+<div className="header-actions">
             <button
               type="button"
-              className="home-button"
+              className="header-link"
               onClick={onBack}
             >
               ← Home
             </button>
 
-            <button
-              type="button"
-              className="home-button"
-              onClick={async () => {
-                const preferences = [];
-                Object.entries(coursePriorities).forEach(([courseId, priorities]) => {
-                  priorities.forEach((item, index) => {
-                    preferences.push({
-                      course_id: Number(courseId),
-                      professor_id: Number(item.professor_id),
-                      theory_offering_id: item.theory_offering_id || null,
-                      lab_offering_id: item.lab_offering_id || null,
-                      priority_rank: index + 1,
+            <div className="header-secondary-group">
+              <button
+                type="button"
+                className="header-link"
+                onClick={async () => {
+                  const preferences = [];
+                  Object.entries(coursePriorities).forEach(([courseId, priorities]) => {
+                    priorities.forEach((item, index) => {
+                      preferences.push({
+                        course_id: Number(courseId),
+                        professor_id: Number(item.professor_id),
+                        theory_offering_id: item.theory_offering_id || null,
+                        lab_offering_id: item.lab_offering_id || null,
+                        priority_rank: index + 1,
+                      });
                     });
                   });
-                });
-                await savePreferences(preferences);
-                setStatus("Progress saved.");
-              }}
-            >
-              Save Progress
-            </button>
+                  await savePreferences(preferences);
+                  setStatus("Progress saved.");
+                }}
+              >
+                Save progress
+              </button>
 
-            <button
-              type="button"
-              className="home-button"
-              onClick={async () => {
-                try {
-                  await submitPreferences();
-                  setStatus("Priorities submitted for FFCS.");
-                } catch (err) {
-                  setStatus(err?.response?.data?.error || "Submit failed — save your priorities first.");
-                }
-              }}
-            >
-              Submit for FFCS
-            </button>
+              <span className="header-divider-dot" />
+
+              <button
+                type="button"
+                className="header-link"
+                onClick={async () => {
+                  try {
+                    await submitPreferences();
+                    setStatus("Priorities submitted for FFCS.");
+                  } catch (err) {
+                    setStatus(err?.response?.data?.error || "Submit failed — save your priorities first.");
+                  }
+                }}
+              >
+                Submit for FFCS
+              </button>
+            </div>
 
             <button
               type="button"
@@ -1701,13 +1705,13 @@ function Dashboard({ student, onLogout, onBack }) {
 
             <button
               type="button"
-              className="logout-button"
+              className="header-link"
               onClick={onLogout}
             >
               Log out
             </button>
           </div>
-          
+                    
         </header>
 
         {status && (
