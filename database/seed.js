@@ -8,7 +8,7 @@
 // This makes clash detection accurate: two offerings clash if they
 // share ANY atomic slot_id.
 // ============================================================
-
+require("dotenv").config();
 const mysql = require("mysql2/promise");
 const {
   DAY_THEORY,
@@ -57,7 +57,7 @@ function splitSlotCode(slotStr) {
 async function seed() {
   const connection = await mysql.createConnection({
     host: "localhost",
-    user: "root",
+    user: process.env.DB_USER, // set your MySQL username here if any
     password: process.env.DB_PASSWORD, // set your MySQL password here if any
     database: "seatsure",
     multipleStatements: true,
