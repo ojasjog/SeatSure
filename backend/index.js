@@ -313,8 +313,8 @@ app.post("/api/register", authenticateToken, requireStudent, async (req, res) =>
 
 // ------------------------------------------------------------
 // POST /api/preferences
-// Body: { student_id, preferences: [{ course_id, professor_id, priority_rank }, ...] }
-// Saves a student's ranked professor preferences for pre-FFCS.
+// Body: { preferences: [...] }
+// Saves the student's current priorities as a DRAFT (Save Progress).
 // ------------------------------------------------------------
 app.post("/api/preferences", authenticateToken, requireStudent, async (req, res) => {
   const { preferences } = req.body;
@@ -327,26 +327,76 @@ app.post("/api/preferences", authenticateToken, requireStudent, async (req, res)
   try {
     await connection.query(`DELETE FROM StudentPreference WHERE student_id = ?`, [student_id]);
     for (const pref of preferences) {
-  await connection.query(
-    `INSERT INTO StudentPreference
-       (student_id, course_id, professor_id, theory_offering_id, lab_offering_id, priority_rank)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      student_id,
-      pref.course_id,
-      pref.professor_id,
-      pref.theory_offering_id || null,
-      pref.lab_offering_id || null,
-      pref.priority_rank,
-    ]
-  );
-}
+      await connection.query(
+        `INSERT INTO StudentPreference
+           (student_id, course_id, professor_id, theory_offering_id, lab_offering_id, priority_rank, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'draft')`,
+        [
+          student_id,
+          pref.course_id,
+          pref.professor_id,
+          pref.theory_offering_id || null,
+          pref.lab_offering_id || null,
+          pref.priority_rank,
+        ]
+      );
+    }
     res.json({ status: "saved", count: preferences.length });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to save preferences" });
   } finally {
     connection.release();
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/preferences/submit
+// Locks in the student's CURRENTLY SAVED preferences as final,
+// for use during the live FFCS simulation.
+// ------------------------------------------------------------
+app.post("/api/preferences/submit", authenticateToken, requireStudent, async (req, res) => {
+  const student_id = req.user.student_id;
+
+  try {
+    const [result] = await pool.query(
+      `UPDATE StudentPreference SET status = 'submitted' WHERE student_id = ?`,
+      [student_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({ error: "No saved preferences to submit. Save your priorities first." });
+    }
+
+    res.json({ status: "submitted", count: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to submit preferences" });
+  }
+});
+
+// ------------------------------------------------------------
+// GET /api/preferences/me
+// Restores the logged-in student's saved priorities (draft or
+// submitted), grouped by course, for the frontend to rebuild
+// the priority UI on login/page load.
+// ------------------------------------------------------------
+app.get("/api/preferences/me", authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT sp.course_id, c.course_name, sp.professor_id, p.name AS professor_name,
+              sp.theory_offering_id, sp.lab_offering_id, sp.priority_rank, sp.status
+       FROM StudentPreference sp
+       JOIN Course c ON sp.course_id = c.course_id
+       JOIN Professor p ON sp.professor_id = p.professor_id
+       WHERE sp.student_id = ?
+       ORDER BY sp.course_id, sp.priority_rank`,
+      [req.user.student_id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch saved preferences" });
   }
 });
 

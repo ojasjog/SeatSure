@@ -3,6 +3,8 @@ import {
   getCourses,
   getCourseProfessors,
   savePreferences,
+  submitPreferences,
+  getMyPreferences,
   generateTimetable,
   getMe,
   TOKEN_KEY,
@@ -627,6 +629,31 @@ function Dashboard({ student, onLogout, onBack }) {
 
     loadCourses();
   }, []);
+
+  useEffect(() => {
+  getMyPreferences().then((rows) => {
+    if (!rows || rows.length === 0) return;
+
+    const restored = {};
+    rows.forEach((row) => {
+      const courseId = row.course_id;
+      if (!restored[courseId]) restored[courseId] = [];
+      restored[courseId].push({
+        id: `${row.professor_id}-${row.theory_offering_id}-${row.lab_offering_id}`,
+        option_id: `${row.professor_id}-${row.theory_offering_id}-${row.lab_offering_id}`,
+        course_id: courseId,
+        professor_id: row.professor_id,
+        professor_name: row.professor_name,
+        theory_offering_id: row.theory_offering_id,
+        lab_offering_id: row.lab_offering_id,
+        slot_display: "",
+        type: row.lab_offering_id && row.theory_offering_id ? "theory_lab" : row.lab_offering_id ? "lab" : "theory",
+      });
+    });
+
+    setCoursePriorities(restored);
+  });
+}, []);
 
   // =========================================================
   // LOAD FACULTY
@@ -1598,13 +1625,51 @@ function Dashboard({ student, onLogout, onBack }) {
             </p>
           </div>
 
-          <div className="header-actions">
+    <div className="header-actions">
             <button
               type="button"
               className="home-button"
               onClick={onBack}
             >
               ← Home
+            </button>
+
+            <button
+              type="button"
+              className="home-button"
+              onClick={async () => {
+                const preferences = [];
+                Object.entries(coursePriorities).forEach(([courseId, priorities]) => {
+                  priorities.forEach((item, index) => {
+                    preferences.push({
+                      course_id: Number(courseId),
+                      professor_id: Number(item.professor_id),
+                      theory_offering_id: item.theory_offering_id || null,
+                      lab_offering_id: item.lab_offering_id || null,
+                      priority_rank: index + 1,
+                    });
+                  });
+                });
+                await savePreferences(preferences);
+                setStatus("Progress saved.");
+              }}
+            >
+              Save Progress
+            </button>
+
+            <button
+              type="button"
+              className="home-button"
+              onClick={async () => {
+                try {
+                  await submitPreferences();
+                  setStatus("Priorities submitted for FFCS.");
+                } catch (err) {
+                  setStatus(err?.response?.data?.error || "Submit failed — save your priorities first.");
+                }
+              }}
+            >
+              Submit for FFCS
             </button>
 
             <button
@@ -1642,6 +1707,7 @@ function Dashboard({ student, onLogout, onBack }) {
               Log out
             </button>
           </div>
+          
         </header>
 
         {status && (

@@ -43,4 +43,10 @@ export const getFFCSOptions = () =>
 export const registerOffering = (offeringId) =>
   client.post("/register", { offering_id: offeringId }).then((r) => r.data);
 
+export const submitPreferences = () =>
+  client.post("/preferences/submit").then((r) => r.data);
+
+export const getMyPreferences = () =>
+  client.get("/preferences/me").then((r) => r.data);
+
 export const SOCKET_URL = "http://localhost:5000";
