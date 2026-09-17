@@ -1,5 +1,5 @@
 -- ============================================================
--- SeatSure Database Schema
+-- SeatSure Database Schema (fully synced version)
 -- BACSE202 - Database Systems
 -- Hardik Jaiswal (25BCE0812), Ojas Jog (25BCE2407)
 -- ============================================================
@@ -42,7 +42,7 @@ CREATE TABLE Student (
     reg_no VARCHAR(20) UNIQUE NOT NULL,
     branch VARCHAR(50),
     semester INT,
-    registration_order INT UNIQUE, -- assigned FFCS turn number (mail order)
+    registration_order INT UNIQUE,
     FOREIGN KEY (user_id) REFERENCES User(user_id) ON DELETE CASCADE
 );
 
@@ -73,15 +73,14 @@ CREATE TABLE Course (
 -- ============================================================
 CREATE TABLE Slot (
     slot_id INT AUTO_INCREMENT PRIMARY KEY,
-    slot_code VARCHAR(10) UNIQUE NOT NULL, -- e.g. "A1", "TA1", "L18"
+    slot_code VARCHAR(10) UNIQUE NOT NULL,
     slot_type ENUM('theory', 'lab') NOT NULL
 );
 
 -- ============================================================
 -- 5b. SlotSchedule (1NF fix: a slot code can occur on MULTIPLE
 -- day/time combinations per week, e.g. "A1" = Mon 8:00 AND Wed
--- 9:00. Storing multiple times in one Slot row would violate 1NF,
--- so each occurrence gets its own row here.)
+-- 9:00. Each occurrence gets its own row here.)
 -- ============================================================
 CREATE TABLE SlotSchedule (
     schedule_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -111,11 +110,7 @@ CREATE TABLE CourseOffering (
 );
 
 -- ============================================================
--- 6b. OfferingSlot (junction: M:N between CourseOffering and Slot.
--- A combined code like "A2+TA2" means this offering occupies BOTH
--- the A2 slot AND the TA2 slot. This is what makes clash detection
--- accurate: two offerings clash if they share ANY row here with
--- the same slot_id.)
+-- 6b. OfferingSlot (junction: M:N between CourseOffering and Slot)
 -- ============================================================
 CREATE TABLE OfferingSlot (
     offering_id INT NOT NULL,
@@ -127,16 +122,24 @@ CREATE TABLE OfferingSlot (
 
 -- ============================================================
 -- 7. StudentPreference (pre-FFCS priority ranking)
+-- Stores the EXACT theory/lab offering a student picked for a
+-- given priority rank — not just the professor. status
+-- distinguishes a draft from a locked-in FFCS submission.
 -- ============================================================
 CREATE TABLE StudentPreference (
     preference_id INT AUTO_INCREMENT PRIMARY KEY,
     student_id INT NOT NULL,
     course_id INT NOT NULL,
     professor_id INT NOT NULL,
+    theory_offering_id INT NULL,
+    lab_offering_id INT NULL,
     priority_rank INT NOT NULL,
+    status ENUM('draft', 'submitted') NOT NULL DEFAULT 'draft',
     FOREIGN KEY (student_id) REFERENCES Student(student_id) ON DELETE CASCADE,
     FOREIGN KEY (course_id) REFERENCES Course(course_id) ON DELETE CASCADE,
     FOREIGN KEY (professor_id) REFERENCES Professor(professor_id) ON DELETE CASCADE,
+    FOREIGN KEY (theory_offering_id) REFERENCES CourseOffering(offering_id) ON DELETE SET NULL,
+    FOREIGN KEY (lab_offering_id) REFERENCES CourseOffering(offering_id) ON DELETE SET NULL,
     UNIQUE KEY unique_student_course_rank (student_id, course_id, priority_rank)
 );
 
