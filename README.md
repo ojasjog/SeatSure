@@ -2,9 +2,6 @@
 
 **SeatSure** is a full-stack course-registration simulator modeled on VIT Vellore's FFCS (Fully Flexible Credit System). It lets a student rank professors/sections by priority, generates clash-free timetable options from those priorities, and then runs a **live, turn-based registration round** — complete with real-time seat counts, automatic clash/seat-availability skipping, and a waitlist fallback — much like the real FFCS registration day.
 
-> Course project — BACSE202 (Database Systems)
-> Hardik Jaiswal (25BCE0812), Ojas Jog (25BCE2407)
-
 ---
 
 ## Current Status
