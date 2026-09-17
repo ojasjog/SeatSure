@@ -623,6 +623,8 @@ function Dashboard({ student, onLogout, onBack }) {
   const [status, setStatus] =
     useState("");
 
+  const [clashInfo, setClashInfo] = useState([]);
+  
   // =========================================================
   // LOAD COURSES
   // =========================================================
@@ -1473,16 +1475,21 @@ function Dashboard({ student, onLogout, onBack }) {
 
         setSelectedIndex(0);
 
-        if (
-          generated.length ===
-          0
-        ) {
-          setStatus(
-            "No clash-free timetable was found."
-          );
-        } else {
-          setStatus("");
-        }
+     if (generated.length === 0) {
+  const clashes = result?.diagnostic?.clashes || [];
+
+  if (clashes.length > 0) {
+    setClashInfo(clashes);
+    setStatus("No clash-free timetable found — see the conflicts below.");
+  } else {
+    setClashInfo([]);
+    setStatus("No clash-free timetable was found.");
+  }
+} else {
+  setClashInfo([]);
+  setStatus("");
+}
+
       } catch (error) {
         console.error(
           "Timetable generation failed:",
@@ -1745,6 +1752,19 @@ function Dashboard({ student, onLogout, onBack }) {
             {status}
           </div>
         )}
+
+        {clashInfo.length > 0 && (
+  <div className="clash-details">
+    <div className="clash-details-title">Conflicts found</div>
+    {clashInfo.map((clash, i) => (
+      <div key={i} className="clash-item">
+        <strong>{clash.course_a}</strong> ({clash.professor_a}) clashes with{" "}
+        <strong>{clash.course_b}</strong> ({clash.professor_b}) on slot(s):{" "}
+        {clash.shared_slot_codes.join(", ")}
+      </div>
+    ))}
+  </div>
+)}
 
         <section className="workspace">
           {currentTimetable ? (
