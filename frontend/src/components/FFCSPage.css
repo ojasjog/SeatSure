@@ -280,3 +280,55 @@
 .ffcs-status-waitlisted {
   color: #b5791f;
 }
+
+/* ---- sequential-round additions ---- */
+
+.ffcs-progress {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.ffcs-option-full {
+  opacity: 0.7;
+}
+
+.ffcs-course-unallocated {
+  border-color: #f0cfc9;
+  background: #fff7f5;
+}
+
+.ffcs-locked-badge-bad {
+  background: #fdeceb;
+  color: #b5382c;
+  border: 1px solid #f4cec9;
+}
+
+.ffcs-summary-banner {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.ffcs-summary-banner h2 {
+  margin: 0 0 6px;
+}
+
+.ffcs-summary-banner p {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.ffcs-summary-detail {
+  font-size: 13px;
+  color: var(--text-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ffcs-summary-detail-muted {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}

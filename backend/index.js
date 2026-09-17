@@ -2,6 +2,8 @@
 // SeatSure Backend - Main Server
 // ============================================================
 require("dotenv").config();
+const http = require("http");
+const { Server } = require("socket.io");
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
@@ -13,6 +15,74 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = 5000;
+
+// ------------------------------------------------------------
+// Socket.IO — live seat counter
+// Every client watching (whether or not they're mid-registration)
+// gets a "seats:update" event whenever a seat is taken, so counts
+// tick down in real time for everyone, not just the student who
+// just registered.
+// ------------------------------------------------------------
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+io.on("connection", (socket) => {
+  // No per-socket state needed — this is a broadcast-only channel.
+  socket.on("disconnect", () => {});
+});
+
+async function emitSeatUpdate(offeringId) {
+  try {
+    const [[row]] = await pool.query(
+      `SELECT seats_remaining, total_seats FROM CourseOffering WHERE offering_id = ?`,
+      [offeringId]
+    );
+    if (row) {
+      io.emit("seats:update", {
+        offering_id: offeringId,
+        seats_remaining: row.seats_remaining,
+        total_seats: row.total_seats,
+      });
+    }
+  } catch (err) {
+    console.error("emitSeatUpdate failed:", err);
+  }
+}
+
+// ------------------------------------------------------------
+// FFCS turn clock
+// Students are released one turn group at a time, in
+// registration_order (their assigned FFCS turn number), the same
+// way real VIT FFCS staggers students by CGPA/seniority slot.
+// FFCS_START_TIME is fixed at server boot; TURN_GAP_SECONDS
+// controls how many seconds apart each turn unlocks. Both are
+// overridable via .env for a faster/slower simulation.
+// ------------------------------------------------------------
+let FFCS_START_TIME = process.env.FFCS_START_TIME
+  ? new Date(process.env.FFCS_START_TIME)
+  : new Date();
+const TURN_GAP_SECONDS = Number(process.env.FFCS_TURN_GAP_SECONDS || 10);
+
+async function getTurnGate(studentId) {
+  const [[student]] = await pool.query(
+    `SELECT registration_order FROM Student WHERE student_id = ?`,
+    [studentId]
+  );
+  if (!student || student.registration_order == null) {
+    const err = new Error("No FFCS registration turn assigned to this student.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const unlocksAt = new Date(
+    FFCS_START_TIME.getTime() + (student.registration_order - 1) * TURN_GAP_SECONDS * 1000
+  );
+  const now = new Date();
+  return {
+    registration_order: student.registration_order,
+    unlocks_at: unlocksAt.toISOString(),
+    open: now >= unlocksAt,
+  };
+}
 
 // ------------------------------------------------------------
 // POST /api/auth/signup
@@ -62,10 +132,18 @@ app.post("/api/auth/signup", async (req, res) => {
     );
     const userId = userResult.insertId;
 
+    // Assign the next FFCS turn number (mail order). This is what
+    // getTurnGate() in the live FFCS engine gates entry on — without
+    // it every student's registration_order stays NULL and /api/ffcs/*
+    // rejects them before they ever see a subject.
+    const [[orderRow]] = await connection.query(
+      `SELECT COALESCE(MAX(registration_order), 0) + 1 AS next_order FROM Student`
+    );
+
     const [studentResult] = await connection.query(
-      `INSERT INTO Student (user_id, name, reg_no, branch, semester)
-       VALUES (?, ?, ?, ?, ?)`,
-      [userId, name, reg_no, branch || null, semester || null]
+      `INSERT INTO Student (user_id, name, reg_no, branch, semester, registration_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [userId, name, reg_no, branch || null, semester || null, orderRow.next_order]
     );
 
     await connection.commit();
@@ -89,6 +167,7 @@ app.post("/api/auth/signup", async (req, res) => {
         reg_no,
         branch: branch || null,
         semester: semester || null,
+        registration_order: orderRow.next_order,
       },
     });
   } catch (err) {
@@ -279,6 +358,8 @@ app.post("/api/register", authenticateToken, requireStudent, async (req, res) =>
 
       await connection.commit();
       connection.release();
+
+      emitSeatUpdate(offering_id);
 
       return res.json({ status: "enrolled", message: "Seat confirmed successfully" });
     } else {
@@ -685,6 +766,388 @@ app.get("/api/timetable/:studentId", authenticateToken, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// ============================================================
+// LIVE FFCS SIMULATOR
+// The "Submit for FFCS" button locks StudentPreference rows to
+// status='submitted'. Everything below is the actual live-round
+// engine that consumes those locked priorities.
+// ============================================================
+
+// Fixed subject order for a student = the order they ranked
+// courses in when they saved preferences (earliest preference_id
+// per course), not alphabetical/course_id order.
+async function getStudentCourseOrder(conn, studentId) {
+  const [rows] = await conn.query(
+    `SELECT course_id, MIN(preference_id) AS first_pref_id
+     FROM StudentPreference
+     WHERE student_id = ? AND status = 'submitted'
+     GROUP BY course_id
+     ORDER BY first_pref_id`,
+    [studentId]
+  );
+  return rows.map((r) => r.course_id);
+}
+
+async function getLockedSlotIds(conn, studentId) {
+  const [rows] = await conn.query(
+    `SELECT DISTINCT os.slot_id
+     FROM Enrollment e
+     JOIN OfferingSlot os ON e.offering_id = os.offering_id
+     WHERE e.student_id = ? AND e.status = 'confirmed'`,
+    [studentId]
+  );
+  return new Set(rows.map((r) => r.slot_id));
+}
+
+// ------------------------------------------------------------
+// GET /api/ffcs/session
+// Tells the frontend whether this student's turn has started yet,
+// and when it will if not.
+// ------------------------------------------------------------
+app.get("/api/ffcs/session", authenticateToken, requireStudent, async (req, res) => {
+  try {
+    const gate = await getTurnGate(req.user.student_id);
+    res.json({
+      ...gate,
+      ffcs_start_time: FFCS_START_TIME.toISOString(),
+      turn_gap_seconds: TURN_GAP_SECONDS,
+      server_time: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || "Failed to load session" });
+  }
+});
+
+// ------------------------------------------------------------
+// GET /api/ffcs/options
+// Read-only view of the CURRENT subject only (one-by-one, per
+// RegistrationProgress.current_course_index). Options that would
+// clash with an already-confirmed subject are filtered out
+// automatically, exactly like the real round.
+// ------------------------------------------------------------
+app.get("/api/ffcs/options", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  try {
+    const gate = await getTurnGate(studentId);
+    if (!gate.open) {
+      return res.status(403).json({ error: "Your FFCS turn hasn't started yet.", unlocks_at: gate.unlocks_at });
+    }
+
+    const courseIds = await getStudentCourseOrder(pool, studentId);
+    if (courseIds.length === 0) {
+      return res.status(400).json({ error: "No submitted priorities found. Submit for FFCS first." });
+    }
+
+    await pool.query(
+      `INSERT INTO RegistrationProgress (student_id, current_course_index, status)
+       VALUES (?, 0, 'in_progress')
+       ON DUPLICATE KEY UPDATE status = IF(status = 'not_started', 'in_progress', status)`,
+      [studentId]
+    );
+
+    const [[progress]] = await pool.query(
+      `SELECT current_course_index, status FROM RegistrationProgress WHERE student_id = ?`,
+      [studentId]
+    );
+
+    if (progress.status === "completed" || progress.current_course_index >= courseIds.length) {
+      return res.json({ done: true, total_courses: courseIds.length });
+    }
+
+    const currentCourseId = courseIds[progress.current_course_index];
+    const lockedSlotIds = await getLockedSlotIds(pool, studentId);
+
+    const [[course]] = await pool.query(
+      `SELECT course_id, course_code, course_name, credits FROM Course WHERE course_id = ?`,
+      [currentCourseId]
+    );
+
+    const [prefRows] = await pool.query(
+      `SELECT sp.professor_id, p.name AS professor_name, sp.theory_offering_id,
+              sp.lab_offering_id, sp.priority_rank
+       FROM StudentPreference sp
+       JOIN Professor p ON sp.professor_id = p.professor_id
+       WHERE sp.student_id = ? AND sp.course_id = ? AND sp.status = 'submitted'
+       ORDER BY sp.priority_rank`,
+      [studentId, currentCourseId]
+    );
+
+    const options = [];
+    for (const pref of prefRows) {
+      const offeringIds = [pref.theory_offering_id, pref.lab_offering_id].filter(Boolean);
+      if (offeringIds.length === 0) continue;
+
+      const placeholders = offeringIds.map(() => "?").join(",");
+      const [seatRows] = await pool.query(
+        `SELECT co.offering_id, co.course_type, co.venue, co.seats_remaining, co.total_seats,
+                s.slot_id, s.slot_code
+         FROM CourseOffering co
+         JOIN OfferingSlot os ON os.offering_id = co.offering_id
+         JOIN Slot s ON s.slot_id = os.slot_id
+         WHERE co.offering_id IN (${placeholders})`,
+        offeringIds
+      );
+
+      const bySeat = new Map();
+      const slotIds = new Set();
+      const slotCodes = new Set();
+      for (const row of seatRows) {
+        slotIds.add(row.slot_id);
+        slotCodes.add(row.slot_code);
+        if (!bySeat.has(row.offering_id)) {
+          bySeat.set(row.offering_id, {
+            offering_id: row.offering_id,
+            course_type: row.course_type,
+            venue: row.venue,
+            seats_remaining: row.seats_remaining,
+            total_seats: row.total_seats,
+          });
+        }
+      }
+
+      // A clashing option is hidden automatically for this subject
+      // onward, exactly as spec'd — not shown as an option at all.
+      const clashes = [...slotIds].some((id) => lockedSlotIds.has(id));
+      if (clashes) continue;
+
+      const seats = [...bySeat.values()];
+      options.push({
+        priority_rank: pref.priority_rank,
+        professor_id: pref.professor_id,
+        professor_name: pref.professor_name,
+        theory_offering_id: pref.theory_offering_id,
+        lab_offering_id: pref.lab_offering_id,
+        seats,
+        slot_codes: [...slotCodes],
+        full: seats.some((s) => s.seats_remaining <= 0),
+      });
+    }
+
+    res.json({
+      done: false,
+      course_index: progress.current_course_index,
+      total_courses: courseIds.length,
+      course,
+      options,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Failed to load FFCS options" });
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/ffcs/confirm
+// The ONE button on the live FFCS page. The client never chooses
+// an offering directly — the server walks the student's priority
+// list for the current subject in order, transactionally:
+//   - skip a priority if it clashes with something already locked
+//   - skip a priority if it's full (auto-tries the next one)
+//   - lock the first one that's both clash-free and has a seat
+// Then advances current_course_index (auto-advance) and broadcasts
+// the new seat counts to everyone live.
+// ------------------------------------------------------------
+app.post("/api/ffcs/confirm", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  const connection = await pool.getConnection();
+
+  try {
+    const gate = await getTurnGate(studentId);
+    if (!gate.open) {
+      connection.release();
+      return res.status(403).json({ error: "Your FFCS turn hasn't started yet.", unlocks_at: gate.unlocks_at });
+    }
+
+    const courseIds = await getStudentCourseOrder(connection, studentId);
+    if (courseIds.length === 0) {
+      connection.release();
+      return res.status(400).json({ error: "No submitted priorities found. Submit for FFCS first." });
+    }
+
+    const [[progress]] = await connection.query(
+      `SELECT current_course_index, status FROM RegistrationProgress WHERE student_id = ?`,
+      [studentId]
+    );
+
+    if (!progress || progress.status === "completed" || progress.current_course_index >= courseIds.length) {
+      connection.release();
+      return res.json({ done: true });
+    }
+
+    const courseId = courseIds[progress.current_course_index];
+
+    await connection.beginTransaction();
+
+    const [prefs] = await connection.query(
+      `SELECT sp.professor_id, p.name AS professor_name, sp.theory_offering_id,
+              sp.lab_offering_id, sp.priority_rank
+       FROM StudentPreference sp
+       JOIN Professor p ON sp.professor_id = p.professor_id
+       WHERE sp.student_id = ? AND sp.course_id = ? AND sp.status = 'submitted'
+       ORDER BY sp.priority_rank`,
+      [studentId, courseId]
+    );
+
+    const lockedSlotIds = await getLockedSlotIds(connection, studentId);
+
+    let allocation = null;
+    let touchedOfferingIds = [];
+
+    for (const pref of prefs) {
+      const offeringIds = [pref.theory_offering_id, pref.lab_offering_id].filter(Boolean);
+      if (offeringIds.length === 0) continue;
+
+      const placeholders = offeringIds.map(() => "?").join(",");
+
+      const [slotRows] = await connection.query(
+        `SELECT DISTINCT slot_id FROM OfferingSlot WHERE offering_id IN (${placeholders})`,
+        offeringIds
+      );
+      const clashes = slotRows.some((r) => lockedSlotIds.has(r.slot_id));
+      if (clashes) continue; // hidden — try next priority automatically
+
+      // Lock every offering in this option together (theory + lab
+      // must both be available, or the option doesn't count).
+      const [offRows] = await connection.query(
+        `SELECT offering_id, seats_remaining FROM CourseOffering WHERE offering_id IN (${placeholders}) FOR UPDATE`,
+        offeringIds
+      );
+      const allAvailable =
+        offRows.length === offeringIds.length && offRows.every((r) => r.seats_remaining > 0);
+      if (!allAvailable) continue; // full — auto-tries next priority
+
+      for (const off of offRows) {
+        await connection.query(
+          `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
+          [off.offering_id]
+        );
+        await connection.query(
+          `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
+          [studentId, off.offering_id]
+        );
+      }
+
+      touchedOfferingIds = offeringIds;
+      allocation = {
+        professor_id: pref.professor_id,
+        professor_name: pref.professor_name,
+        priority_rank: pref.priority_rank,
+        offering_ids: offeringIds,
+      };
+      break;
+    }
+
+    const nextIndex = progress.current_course_index + 1;
+    const nextStatus = nextIndex >= courseIds.length ? "completed" : "in_progress";
+
+    await connection.query(
+      `UPDATE RegistrationProgress SET current_course_index = ?, status = ? WHERE student_id = ?`,
+      [nextIndex, nextStatus, studentId]
+    );
+
+    await connection.commit();
+    connection.release();
+
+    touchedOfferingIds.forEach((id) => emitSeatUpdate(id));
+
+    const [[course]] = await pool.query(
+      `SELECT course_id, course_code, course_name FROM Course WHERE course_id = ?`,
+      [courseId]
+    );
+
+    res.json({
+      done: nextIndex >= courseIds.length,
+      course,
+      allocated: !!allocation,
+      allocation,
+    });
+  } catch (err) {
+    await connection.rollback();
+    connection.release();
+    console.error(err);
+    res.status(500).json({ error: "Failed to confirm registration" });
+  }
+});
+
+// ------------------------------------------------------------
+// GET /api/ffcs/summary
+// Final Summary Screen data: every subject the student ranked,
+// allocated or not, once their round is complete (or mid-round,
+// for a live progress view).
+// ------------------------------------------------------------
+app.get("/api/ffcs/summary", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  try {
+    const courseIds = await getStudentCourseOrder(pool, studentId);
+
+    let courses = [];
+    if (courseIds.length > 0) {
+      const placeholders = courseIds.map(() => "?").join(",");
+      [courses] = await pool.query(
+        `SELECT course_id, course_code, course_name, credits FROM Course WHERE course_id IN (${placeholders})`,
+        courseIds
+      );
+    }
+    const courseMap = new Map(courses.map((c) => [c.course_id, c]));
+
+    const [enrolledRows] = await pool.query(
+      `SELECT co.course_id, co.course_type, co.venue, p.name AS professor_name,
+              GROUP_CONCAT(DISTINCT s.slot_code SEPARATOR '+') AS slot_codes
+       FROM Enrollment e
+       JOIN CourseOffering co ON e.offering_id = co.offering_id
+       JOIN Professor p ON co.professor_id = p.professor_id
+       JOIN OfferingSlot os ON os.offering_id = co.offering_id
+       JOIN Slot s ON s.slot_id = os.slot_id
+       WHERE e.student_id = ? AND e.status = 'confirmed'
+       GROUP BY co.course_id, co.offering_id, co.course_type, co.venue, p.name`,
+      [studentId]
+    );
+
+    const byCourse = new Map();
+    for (const row of enrolledRows) {
+      if (!byCourse.has(row.course_id)) {
+        byCourse.set(row.course_id, { professor_name: row.professor_name, sections: [] });
+      }
+      byCourse.get(row.course_id).sections.push({
+        course_type: row.course_type,
+        venue: row.venue,
+        slot_codes: row.slot_codes,
+      });
+    }
+
+    const [[progress]] = await pool.query(
+      `SELECT current_course_index, status FROM RegistrationProgress WHERE student_id = ?`,
+      [studentId]
+    );
+
+    const summary = courseIds.map((id) => {
+      const course = courseMap.get(id);
+      const enrolled = byCourse.get(id);
+      return {
+        course_id: id,
+        course_code: course?.course_code,
+        course_name: course?.course_name,
+        allocated: !!enrolled,
+        professor_name: enrolled?.professor_name || null,
+        sections: enrolled?.sections || [],
+      };
+    });
+
+    res.json({
+      status: progress?.status || "not_started",
+      allocated_count: summary.filter((s) => s.allocated).length,
+      not_allocated_count: summary.filter((s) => !s.allocated).length,
+      courses: summary,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load summary" });
+  }
+});
+
+server.listen(PORT, () => {
   console.log(`SeatSure backend running on http://localhost:${PORT}`);
+  console.log(
+    `FFCS clock: turn 1 opens now, +${TURN_GAP_SECONDS}s per registration_order after that.`
+  );
 });

@@ -37,8 +37,17 @@ export const generateTimetable = () =>
   client.get("/timetable/me").then((r) => r.data);
 
 // ---- FFCS (live) ----
+export const getFFCSSession = () =>
+  client.get("/ffcs/session").then((r) => r.data);
+
 export const getFFCSOptions = () =>
   client.get("/ffcs/options").then((r) => r.data);
+
+export const confirmFFCSChoice = () =>
+  client.post("/ffcs/confirm").then((r) => r.data);
+
+export const getFFCSSummary = () =>
+  client.get("/ffcs/summary").then((r) => r.data);
 
 export const registerOffering = (offeringId) =>
   client.post("/register", { offering_id: offeringId }).then((r) => r.data);
