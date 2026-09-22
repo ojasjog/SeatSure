@@ -43,8 +43,11 @@ export const getFFCSSession = () =>
 export const getFFCSOptions = () =>
   client.get("/ffcs/options").then((r) => r.data);
 
-export const confirmFFCSChoice = () =>
-  client.post("/ffcs/confirm").then((r) => r.data);
+export const confirmFFCSChoice = (professorId) =>
+  client.post("/ffcs/confirm", { professor_id: professorId }).then((r) => r.data);
+
+export const skipFFCSSubject = () =>
+  client.post("/ffcs/skip").then((r) => r.data);
 
 export const getFFCSSummary = () =>
   client.get("/ffcs/summary").then((r) => r.data);

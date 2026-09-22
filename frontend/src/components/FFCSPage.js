@@ -1,68 +1,53 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { io } from "socket.io-client";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   confirmFFCSChoice,
   getFFCSOptions,
   getFFCSSession,
   getFFCSSummary,
-  SOCKET_URL,
+  skipFFCSSubject,
 } from "../api";
 import "./FFCSPage.css";
 
 // =========================================================
-// SEAT BAR
+// FACULTY ROW — plain radio pick. Shortlisted faculty (ranked
+// during the preference step) are pinned to the top of the list
+// and visually highlighted; everyone else follows alphabetically.
+// No seat counts are shown here — availability is only surfaced
+// if a Confirm attempt actually fails.
 // =========================================================
 
-function SeatBar({ seatsRemaining, totalSeats }) {
-  const pct =
-    totalSeats > 0 ? Math.max(0, Math.min(100, (seatsRemaining / totalSeats) * 100)) : 0;
-
-  const level =
-    seatsRemaining <= 0 ? "full" : pct <= 20 ? "low" : pct <= 50 ? "mid" : "ok";
+function FacultyRow({ faculty, selected, onSelect }) {
+  const isShortlisted = faculty.priority_rank != null;
 
   return (
-    <div className={`seat-bar seat-bar-${level}`}>
-      <div className="seat-bar-fill" style={{ width: `${pct}%` }} />
-      <span className="seat-bar-label">
-        {seatsRemaining}/{totalSeats} seats
-      </span>
-    </div>
-  );
-}
-
-// =========================================================
-// PRIORITY OPTION ROW (read-only — the server decides which one
-// actually gets locked in when Confirm is pressed)
-// =========================================================
-
-function PriorityRow({ option, isTopViable }) {
-  return (
-    <div
-      className={`ffcs-option ${isTopViable ? "ffcs-option-enrolled" : ""} ${
-        option.full ? "ffcs-option-full" : ""
+    <label
+      className={`ffcs-faculty-row ${isShortlisted ? "ffcs-faculty-row-shortlisted" : ""} ${
+        selected ? "ffcs-faculty-row-selected" : ""
       }`}
     >
-      <div className="ffcs-option-top">
-        <div className="ffcs-option-rank">P{option.priority_rank}</div>
-        <div className="ffcs-option-professor">{option.professor_name}</div>
-        <div className="ffcs-option-slots">{option.slot_codes.join(" + ")}</div>
-        {isTopViable && <span className="ffcs-status ffcs-status-enrolled">Will be tried first</span>}
-        {option.full && !isTopViable && (
-          <span className="ffcs-status ffcs-status-waitlisted">Full — auto-skipped</span>
-        )}
-      </div>
+      <input
+        type="radio"
+        name="ffcs-faculty"
+        className="ffcs-faculty-radio"
+        checked={selected}
+        onChange={() => onSelect(faculty.professor_id)}
+      />
 
-      <div className="ffcs-option-seats">
-        {option.seats.map((seat) => (
-          <div key={seat.offering_id} className="ffcs-option-seat-row">
-            <span className="ffcs-option-seat-type">
-              {seat.course_type === "lab" ? "Lab" : "Theory"} · {seat.venue}
+      <div className="ffcs-faculty-main">
+        <div className="ffcs-faculty-top">
+          {isShortlisted && <span className="ffcs-option-rank">P{faculty.priority_rank}</span>}
+          <span className="ffcs-faculty-name">{faculty.professor_name}</span>
+          <span className="ffcs-faculty-slots">{faculty.slot_codes.join(" + ")}</span>
+        </div>
+        <div className="ffcs-faculty-sections">
+          {faculty.sections.map((s) => (
+            <span key={s.offering_id} className="ffcs-faculty-section">
+              {s.course_type === "lab" ? "Lab" : "Theory"} · {s.venue}
             </span>
-            <SeatBar seatsRemaining={seat.seats_remaining} totalSeats={seat.total_seats} />
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
-    </div>
+    </label>
   );
 }
 
@@ -141,8 +126,8 @@ function SummaryScreen({ summary, onBack }) {
               </div>
             </div>
           ) : (
-            <div className="ffcs-summary-detail ffcs-summary-detail-muted">
-              All ranked professors were full or clashed with another subject you locked in.
+            <div className="ffcs-summary-detail-muted">
+              No faculty member was selected for this subject before it was skipped.
             </div>
           )}
         </div>
@@ -159,16 +144,29 @@ function SummaryScreen({ summary, onBack }) {
 // FFCS PAGE
 // =========================================================
 
+// Faculty the student shortlisted come first (in their ranked
+// order); everyone else follows alphabetically by name.
+function sortFaculty(faculty) {
+  return [...faculty].sort((a, b) => {
+    const aRanked = a.priority_rank != null;
+    const bRanked = b.priority_rank != null;
+    if (aRanked && bRanked) return a.priority_rank - b.priority_rank;
+    if (aRanked) return -1;
+    if (bRanked) return 1;
+    return a.professor_name.localeCompare(b.professor_name);
+  });
+}
+
 function FFCSPage({ onBack }) {
   const [phase, setPhase] = useState("loading"); // loading | waiting | active | summary | error
   const [unlocksAt, setUnlocksAt] = useState(null);
-  const [courseData, setCourseData] = useState(null); // { course, options, course_index, total_courses }
+  const [courseData, setCourseData] = useState(null); // { course, faculty, course_index, total_courses }
+  const [selectedProfessorId, setSelectedProfessorId] = useState(null);
   const [summary, setSummary] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [skipping, setSkipping] = useState(false);
   const [resultMessage, setResultMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const socketRef = useRef(null);
-  const advanceTimerRef = useRef(null);
 
   const loadSummary = useCallback(async () => {
     try {
@@ -190,6 +188,9 @@ function FFCSPage({ onBack }) {
         return;
       }
       setCourseData(data);
+      // Default-select the student's top shortlisted faculty, if any.
+      const sorted = sortFaculty(data.faculty);
+      setSelectedProfessorId(sorted[0]?.professor_id ?? null);
       setPhase("active");
     } catch (error) {
       const apiError = error?.response?.data?.error;
@@ -223,59 +224,35 @@ function FFCSPage({ onBack }) {
         setPhase("error");
       }
     })();
-    return () => {
-      if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- Live seat updates, active the whole time the page is open ----
-  useEffect(() => {
-    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"] });
-    socketRef.current = socket;
-
-    socket.on("seats:update", ({ offering_id, seats_remaining, total_seats }) => {
-      setCourseData((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          options: prev.options.map((option) => {
-            const seats = option.seats.map((seat) =>
-              seat.offering_id === offering_id ? { ...seat, seats_remaining, total_seats } : seat
-            );
-            return { ...option, seats, full: seats.some((s) => s.seats_remaining <= 0) };
-          }),
-        };
-      });
-    });
-
-    return () => socket.disconnect();
-  }, []);
-
-  // ---- Confirm → auto-advance ----
+  // ---- Confirm the selected faculty member ----
   const handleConfirm = async () => {
+    if (!selectedProfessorId) return;
     setConfirming(true);
     setResultMessage("");
 
     try {
-      const result = await confirmFFCSChoice();
+      const result = await confirmFFCSChoice(selectedProfessorId);
 
-      setResultMessage(
-        result.allocated
-          ? `Locked in ${result.allocation.professor_name} (priority ${result.allocation.priority_rank}) for ${result.course.course_name}.`
-          : `Couldn't allocate ${result.course.course_name} — every ranked professor was full or clashed.`
-      );
-
-      // Auto-advance with no manual "next" click, after a short beat
-      // so the student sees what happened.
-      advanceTimerRef.current = setTimeout(() => {
-        setResultMessage("");
-        if (result.done) {
-          loadSummary();
-        } else {
-          loadCurrentSubject();
-        }
-      }, 1100);
+      if (result.allocated) {
+        setResultMessage(
+          `Locked in ${result.allocation.professor_name} for ${result.course.course_name}.`
+        );
+        setTimeout(() => {
+          setResultMessage("");
+          if (result.done) {
+            loadSummary();
+          } else {
+            loadCurrentSubject();
+          }
+        }, 900);
+      } else {
+        // Not allocated (full/clash) — stay on this subject so the
+        // student can pick someone else.
+        setResultMessage(result.message || "Couldn't lock that in — pick another faculty member.");
+      }
     } catch (error) {
       console.error("Confirm failed:", error);
       setErrorMessage(error?.response?.data?.error || "Confirm failed — try again.");
@@ -284,7 +261,24 @@ function FFCSPage({ onBack }) {
     }
   };
 
-  const topViableRank = courseData?.options.find((o) => !o.full)?.priority_rank;
+  const handleSkip = async () => {
+    setSkipping(true);
+    try {
+      const result = await skipFFCSSubject();
+      if (result.done) {
+        loadSummary();
+      } else {
+        loadCurrentSubject();
+      }
+    } catch (error) {
+      console.error("Skip failed:", error);
+      setErrorMessage(error?.response?.data?.error || "Couldn't skip this subject — try again.");
+    } finally {
+      setSkipping(false);
+    }
+  };
+
+  const sortedFaculty = courseData ? sortFaculty(courseData.faculty) : [];
 
   return (
     <div className="ffcs-shell">
@@ -297,8 +291,9 @@ function FFCSPage({ onBack }) {
           <div className="eyebrow">VIT VELLORE · LIVE FFCS</div>
           <h1>Live FFCS round</h1>
           <p>
-            Subjects appear one at a time, in the order you ranked them. Confirm locks in your
-            best available priority and moves you straight to the next subject.
+            Subjects appear one at a time, in the order you ranked them. Pick a faculty member
+            for each — your shortlisted priorities are pinned to the top — then confirm to move
+            to the next subject.
           </p>
         </div>
 
@@ -328,18 +323,19 @@ function FFCSPage({ onBack }) {
               </div>
             </div>
 
-            {courseData.options.length === 0 ? (
+            {sortedFaculty.length === 0 ? (
               <p className="ffcs-summary-detail-muted">
-                Every ranked professor for this subject clashes with something you've already
-                locked in. Confirming will mark it as not allocated and move on.
+                Every faculty member for this subject clashes with something you've already
+                locked in. Skip to mark it as not allocated and move on.
               </p>
             ) : (
-              <div className="ffcs-options">
-                {courseData.options.map((option) => (
-                  <PriorityRow
-                    key={option.priority_rank}
-                    option={option}
-                    isTopViable={option.priority_rank === topViableRank}
+              <div className="ffcs-faculty-list">
+                {sortedFaculty.map((faculty) => (
+                  <FacultyRow
+                    key={faculty.professor_id}
+                    faculty={faculty}
+                    selected={faculty.professor_id === selectedProfessorId}
+                    onSelect={setSelectedProfessorId}
                   />
                 ))}
               </div>
@@ -348,8 +344,16 @@ function FFCSPage({ onBack }) {
             <div className="ffcs-option-footer">
               <button
                 type="button"
+                className="ffcs-skip-button"
+                disabled={confirming || skipping}
+                onClick={handleSkip}
+              >
+                {skipping ? "Skipping..." : "Skip subject"}
+              </button>
+              <button
+                type="button"
                 className="ffcs-register-button"
-                disabled={confirming}
+                disabled={confirming || skipping || !selectedProfessorId}
                 onClick={handleConfirm}
               >
                 {confirming ? "Confirming..." : "Confirm & continue"}

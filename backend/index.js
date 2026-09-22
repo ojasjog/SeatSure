@@ -821,9 +821,14 @@ app.get("/api/ffcs/session", authenticateToken, requireStudent, async (req, res)
 // ------------------------------------------------------------
 // GET /api/ffcs/options
 // Read-only view of the CURRENT subject only (one-by-one, per
-// RegistrationProgress.current_course_index). Options that would
-// clash with an already-confirmed subject are filtered out
-// automatically, exactly like the real round.
+// RegistrationProgress.current_course_index). Returns EVERY
+// faculty member teaching this course (not just the student's
+// shortlist) so the frontend can render a plain pick-one list.
+// Each faculty row carries priority_rank (null if the student
+// never ranked them) so the client can pin/highlight their
+// shortlist at the top. Faculty whose slots clash with something
+// the student already locked in are filtered out automatically,
+// exactly like the real round.
 // ------------------------------------------------------------
 app.get("/api/ffcs/options", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
@@ -862,64 +867,83 @@ app.get("/api/ffcs/options", authenticateToken, requireStudent, async (req, res)
       [currentCourseId]
     );
 
-    const [prefRows] = await pool.query(
-      `SELECT sp.professor_id, p.name AS professor_name, sp.theory_offering_id,
-              sp.lab_offering_id, sp.priority_rank
-       FROM StudentPreference sp
-       JOIN Professor p ON sp.professor_id = p.professor_id
-       WHERE sp.student_id = ? AND sp.course_id = ? AND sp.status = 'submitted'
-       ORDER BY sp.priority_rank`,
-      [studentId, currentCourseId]
+    // Every offering (theory/lab rows) for every professor teaching
+    // this course, with each offering's slots.
+    const [offeringRows] = await pool.query(
+      `SELECT p.professor_id, p.name AS professor_name, co.offering_id, co.course_type,
+              co.venue, s.slot_id, s.slot_code
+       FROM CourseOffering co
+       JOIN Professor p ON co.professor_id = p.professor_id
+       JOIN OfferingSlot os ON os.offering_id = co.offering_id
+       JOIN Slot s ON s.slot_id = os.slot_id
+       WHERE co.course_id = ?
+       ORDER BY p.name, co.course_type`,
+      [currentCourseId]
     );
 
-    const options = [];
-    for (const pref of prefRows) {
-      const offeringIds = [pref.theory_offering_id, pref.lab_offering_id].filter(Boolean);
-      if (offeringIds.length === 0) continue;
+    // The student's own priority ranking for this course, if any
+    // (submitted during the ranking step) — used only to sort/highlight.
+    const [prefRows] = await pool.query(
+      `SELECT professor_id, priority_rank
+       FROM StudentPreference
+       WHERE student_id = ? AND course_id = ? AND status = 'submitted'`,
+      [studentId, currentCourseId]
+    );
+    const rankByProfessor = new Map(prefRows.map((r) => [r.professor_id, r.priority_rank]));
 
-      const placeholders = offeringIds.map(() => "?").join(",");
-      const [seatRows] = await pool.query(
-        `SELECT co.offering_id, co.course_type, co.venue, co.seats_remaining, co.total_seats,
-                s.slot_id, s.slot_code
-         FROM CourseOffering co
-         JOIN OfferingSlot os ON os.offering_id = co.offering_id
-         JOIN Slot s ON s.slot_id = os.slot_id
-         WHERE co.offering_id IN (${placeholders})`,
-        offeringIds
-      );
+    // Group offering rows by professor.
+    const byProfessor = new Map();
+    for (const row of offeringRows) {
+      if (!byProfessor.has(row.professor_id)) {
+        byProfessor.set(row.professor_id, {
+          professor_id: row.professor_id,
+          professor_name: row.professor_name,
+          offeringsById: new Map(),
+        });
+      }
+      const prof = byProfessor.get(row.professor_id);
+      if (!prof.offeringsById.has(row.offering_id)) {
+        prof.offeringsById.set(row.offering_id, {
+          offering_id: row.offering_id,
+          course_type: row.course_type,
+          venue: row.venue,
+          slot_ids: new Set(),
+          slot_codes: new Set(),
+        });
+      }
+      const offering = prof.offeringsById.get(row.offering_id);
+      offering.slot_ids.add(row.slot_id);
+      offering.slot_codes.add(row.slot_code);
+    }
 
-      const bySeat = new Map();
-      const slotIds = new Set();
-      const slotCodes = new Set();
-      for (const row of seatRows) {
-        slotIds.add(row.slot_id);
-        slotCodes.add(row.slot_code);
-        if (!bySeat.has(row.offering_id)) {
-          bySeat.set(row.offering_id, {
-            offering_id: row.offering_id,
-            course_type: row.course_type,
-            venue: row.venue,
-            seats_remaining: row.seats_remaining,
-            total_seats: row.total_seats,
-          });
-        }
+    const faculty = [];
+    for (const prof of byProfessor.values()) {
+      const sections = [...prof.offeringsById.values()];
+
+      const allSlotIds = new Set();
+      const allSlotCodes = new Set();
+      for (const section of sections) {
+        section.slot_ids.forEach((id) => allSlotIds.add(id));
+        section.slot_codes.forEach((code) => allSlotCodes.add(code));
       }
 
-      // A clashing option is hidden automatically for this subject
-      // onward, exactly as spec'd — not shown as an option at all.
-      const clashes = [...slotIds].some((id) => lockedSlotIds.has(id));
+      // Hide faculty whose slots clash with a subject already locked in.
+      const clashes = [...allSlotIds].some((id) => lockedSlotIds.has(id));
       if (clashes) continue;
 
-      const seats = [...bySeat.values()];
-      options.push({
-        priority_rank: pref.priority_rank,
-        professor_id: pref.professor_id,
-        professor_name: pref.professor_name,
-        theory_offering_id: pref.theory_offering_id,
-        lab_offering_id: pref.lab_offering_id,
-        seats,
-        slot_codes: [...slotCodes],
-        full: seats.some((s) => s.seats_remaining <= 0),
+      faculty.push({
+        professor_id: prof.professor_id,
+        professor_name: prof.professor_name,
+        priority_rank: rankByProfessor.has(prof.professor_id)
+          ? rankByProfessor.get(prof.professor_id)
+          : null,
+        slot_codes: [...allSlotCodes],
+        sections: sections.map((s) => ({
+          offering_id: s.offering_id,
+          course_type: s.course_type,
+          venue: s.venue,
+          slot_codes: [...s.slot_codes],
+        })),
       });
     }
 
@@ -928,7 +952,7 @@ app.get("/api/ffcs/options", authenticateToken, requireStudent, async (req, res)
       course_index: progress.current_course_index,
       total_courses: courseIds.length,
       course,
-      options,
+      faculty,
     });
   } catch (err) {
     console.error(err);
@@ -938,17 +962,20 @@ app.get("/api/ffcs/options", authenticateToken, requireStudent, async (req, res)
 
 // ------------------------------------------------------------
 // POST /api/ffcs/confirm
-// The ONE button on the live FFCS page. The client never chooses
-// an offering directly — the server walks the student's priority
-// list for the current subject in order, transactionally:
-//   - skip a priority if it clashes with something already locked
-//   - skip a priority if it's full (auto-tries the next one)
-//   - lock the first one that's both clash-free and has a seat
-// Then advances current_course_index (auto-advance) and broadcasts
-// the new seat counts to everyone live.
+// Body: { professor_id }
+// The ONE button on the live FFCS page. The student picks exactly
+// one faculty member (radio button) for the current subject; the
+// server tries to lock that specific choice, transactionally:
+//   - reject if it clashes with something already locked
+//   - reject if it's full
+//   - otherwise lock every offering for that professor (theory +
+//     lab together) and advance to the next subject
+// A rejected pick does NOT advance the subject, so the student can
+// choose someone else and confirm again.
 // ------------------------------------------------------------
 app.post("/api/ffcs/confirm", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
+  const { professor_id } = req.body;
   const connection = await pool.getConnection();
 
   try {
@@ -956,6 +983,11 @@ app.post("/api/ffcs/confirm", authenticateToken, requireStudent, async (req, res
     if (!gate.open) {
       connection.release();
       return res.status(403).json({ error: "Your FFCS turn hasn't started yet.", unlocks_at: gate.unlocks_at });
+    }
+
+    if (!professor_id) {
+      connection.release();
+      return res.status(400).json({ error: "Select a faculty member first." });
     }
 
     const courseIds = await getStudentCourseOrder(connection, studentId);
@@ -976,65 +1008,76 @@ app.post("/api/ffcs/confirm", authenticateToken, requireStudent, async (req, res
 
     const courseId = courseIds[progress.current_course_index];
 
-    await connection.beginTransaction();
-
-    const [prefs] = await connection.query(
-      `SELECT sp.professor_id, p.name AS professor_name, sp.theory_offering_id,
-              sp.lab_offering_id, sp.priority_rank
-       FROM StudentPreference sp
-       JOIN Professor p ON sp.professor_id = p.professor_id
-       WHERE sp.student_id = ? AND sp.course_id = ? AND sp.status = 'submitted'
-       ORDER BY sp.priority_rank`,
-      [studentId, courseId]
+    const [[course]] = await pool.query(
+      `SELECT course_id, course_code, course_name FROM Course WHERE course_id = ?`,
+      [courseId]
     );
 
+    await connection.beginTransaction();
+
+    const [[professor]] = await connection.query(
+      `SELECT professor_id, name AS professor_name FROM Professor WHERE professor_id = ?`,
+      [professor_id]
+    );
+    if (!professor) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ error: "Faculty member not found." });
+    }
+
+    const [offRows] = await connection.query(
+      `SELECT offering_id, seats_remaining FROM CourseOffering
+       WHERE course_id = ? AND professor_id = ? FOR UPDATE`,
+      [courseId, professor_id]
+    );
+    if (offRows.length === 0) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ error: "That faculty member doesn't teach this subject." });
+    }
+    const offeringIds = offRows.map((r) => r.offering_id);
+
     const lockedSlotIds = await getLockedSlotIds(connection, studentId);
+    const placeholders = offeringIds.map(() => "?").join(",");
+    const [slotRows] = await connection.query(
+      `SELECT DISTINCT slot_id FROM OfferingSlot WHERE offering_id IN (${placeholders})`,
+      offeringIds
+    );
+    const clashes = slotRows.some((r) => lockedSlotIds.has(r.slot_id));
+    if (clashes) {
+      await connection.rollback();
+      connection.release();
+      return res.json({
+        done: false,
+        course,
+        allocated: false,
+        reason: "clash",
+        message: `${professor.professor_name} clashes with a subject you've already locked in.`,
+      });
+    }
 
-    let allocation = null;
-    let touchedOfferingIds = [];
+    const allAvailable = offRows.every((r) => r.seats_remaining > 0);
+    if (!allAvailable) {
+      await connection.rollback();
+      connection.release();
+      return res.json({
+        done: false,
+        course,
+        allocated: false,
+        reason: "full",
+        message: `${professor.professor_name}'s section just filled up. Pick another faculty member.`,
+      });
+    }
 
-    for (const pref of prefs) {
-      const offeringIds = [pref.theory_offering_id, pref.lab_offering_id].filter(Boolean);
-      if (offeringIds.length === 0) continue;
-
-      const placeholders = offeringIds.map(() => "?").join(",");
-
-      const [slotRows] = await connection.query(
-        `SELECT DISTINCT slot_id FROM OfferingSlot WHERE offering_id IN (${placeholders})`,
-        offeringIds
+    for (const off of offRows) {
+      await connection.query(
+        `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
+        [off.offering_id]
       );
-      const clashes = slotRows.some((r) => lockedSlotIds.has(r.slot_id));
-      if (clashes) continue; // hidden — try next priority automatically
-
-      // Lock every offering in this option together (theory + lab
-      // must both be available, or the option doesn't count).
-      const [offRows] = await connection.query(
-        `SELECT offering_id, seats_remaining FROM CourseOffering WHERE offering_id IN (${placeholders}) FOR UPDATE`,
-        offeringIds
+      await connection.query(
+        `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
+        [studentId, off.offering_id]
       );
-      const allAvailable =
-        offRows.length === offeringIds.length && offRows.every((r) => r.seats_remaining > 0);
-      if (!allAvailable) continue; // full — auto-tries next priority
-
-      for (const off of offRows) {
-        await connection.query(
-          `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
-          [off.offering_id]
-        );
-        await connection.query(
-          `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
-          [studentId, off.offering_id]
-        );
-      }
-
-      touchedOfferingIds = offeringIds;
-      allocation = {
-        professor_id: pref.professor_id,
-        professor_name: pref.professor_name,
-        priority_rank: pref.priority_rank,
-        offering_ids: offeringIds,
-      };
-      break;
     }
 
     const nextIndex = progress.current_course_index + 1;
@@ -1048,24 +1091,62 @@ app.post("/api/ffcs/confirm", authenticateToken, requireStudent, async (req, res
     await connection.commit();
     connection.release();
 
-    touchedOfferingIds.forEach((id) => emitSeatUpdate(id));
-
-    const [[course]] = await pool.query(
-      `SELECT course_id, course_code, course_name FROM Course WHERE course_id = ?`,
-      [courseId]
-    );
+    offeringIds.forEach((id) => emitSeatUpdate(id));
 
     res.json({
       done: nextIndex >= courseIds.length,
       course,
-      allocated: !!allocation,
-      allocation,
+      allocated: true,
+      allocation: {
+        professor_id: professor.professor_id,
+        professor_name: professor.professor_name,
+        offering_ids: offeringIds,
+      },
     });
   } catch (err) {
     await connection.rollback();
     connection.release();
     console.error(err);
     res.status(500).json({ error: "Failed to confirm registration" });
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/ffcs/skip
+// Marks the current subject as not allocated and moves on, for
+// when the student doesn't want (or isn't able) to lock in any
+// of the listed faculty.
+// ------------------------------------------------------------
+app.post("/api/ffcs/skip", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  try {
+    const gate = await getTurnGate(studentId);
+    if (!gate.open) {
+      return res.status(403).json({ error: "Your FFCS turn hasn't started yet.", unlocks_at: gate.unlocks_at });
+    }
+
+    const courseIds = await getStudentCourseOrder(pool, studentId);
+    const [[progress]] = await pool.query(
+      `SELECT current_course_index, status FROM RegistrationProgress WHERE student_id = ?`,
+      [studentId]
+    );
+
+    if (!progress || progress.status === "completed" || progress.current_course_index >= courseIds.length) {
+      return res.json({ done: true });
+    }
+
+    const nextIndex = progress.current_course_index + 1;
+    const nextStatus = nextIndex >= courseIds.length ? "completed" : "in_progress";
+
+    await pool.query(
+      `UPDATE RegistrationProgress SET current_course_index = ?, status = ? WHERE student_id = ?`,
+      [nextIndex, nextStatus, studentId]
+    );
+
+    res.json({ done: nextIndex >= courseIds.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to skip subject" });
   }
 });
 
