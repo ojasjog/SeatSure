@@ -21,8 +21,8 @@ const mysql = require("mysql2/promise");
 async function resetSimulation() {
   const connection = await mysql.createConnection({
     host: "localhost",
-    user: "root",
-    password: "", // match your backend/db.js password
+    user: process.env.DB_USER, // match your backend/db.js user
+    password: process.env.DB_PASSWORD, // match your backend/db.js password
     database: "seatsure",
   });
 
