@@ -8,6 +8,7 @@ import {
   generateTimetable,
   getMe,
   TOKEN_KEY,
+  resetMyFFCS, // add this
 } from "./api";
 import Login from "./components/Login";
 import Landing from "./components/Landing";
@@ -1567,6 +1568,10 @@ function Dashboard({ student, onLogout, onBack }) {
           )}
         </div>
 
+        
+
+        
+
         <div className="sidebar-section courses-sidebar">
           <div className="sidebar-heading">
             COURSES
@@ -1737,12 +1742,33 @@ function Dashboard({ student, onLogout, onBack }) {
             </button>
 
             <button
-              type="button"
-              className="header-link"
-              onClick={onLogout}
-            >
-              Log out
-            </button>
+  type="button"
+  className="header-link"
+  onClick={async () => {
+    const confirmed = window.confirm(
+      "This will clear your saved priorities and any FFCS picks so you can redo the whole flow. Continue?"
+    );
+    if (!confirmed) return;
+
+    try {
+      await resetMyFFCS();
+      window.location.reload();
+    } catch (err) {
+      alert("Reset failed — check the console.");
+      console.error(err);
+    }
+  }}
+>
+  Reset simulation
+</button>
+
+<button
+  type="button"
+  className="header-link"
+  onClick={onLogout}
+>
+  Log out
+</button>
           </div>
 
         </header>

@@ -61,4 +61,6 @@ export const submitPreferences = () =>
 export const getMyPreferences = () =>
   client.get("/preferences/me").then((r) => r.data);
 
+export const resetMyFFCS = () => client.post("/student/reset-ffcs");
+
 export const SOCKET_URL = "http://localhost:5000";
