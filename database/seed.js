@@ -8,8 +8,7 @@
 // This makes clash detection accurate: two offerings clash if they
 // share ANY atomic slot_id.
 // ============================================================
-require("dotenv").config();
-const mysql = require("mysql2/promise");
+const pool = require("../backend/db");
 const {
   DAY_THEORY,
   DAY_LAB,
@@ -43,7 +42,7 @@ function buildScheduleMap() {
   return map;
 }
 
-function toMySQLTime(hhmm) {
+function toSqlTime(hhmm) {
   const [h, m] = hhmm.split(":").map(Number);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
 }
@@ -55,15 +54,17 @@ function splitSlotCode(slotStr) {
 }
 
 async function seed() {
-  const connection = await mysql.createConnection({
-    host: "localhost",
-    user: process.env.DB_USER, // set your MySQL username here if any
-    password: process.env.DB_PASSWORD, // set your MySQL password here if any
-    database: "seatsure",
-    multipleStatements: true,
-  });
+  const connection = pool;
 
-  console.log("Connected to MySQL. Starting seed (v2: atomic slots)...");
+  // Safety: this script is NOT idempotent and the DB is shared.
+  const [[existing]] = await connection.query(`SELECT COUNT(*) AS n FROM Course`);
+  if (existing.n > 0) {
+    console.log("Database already has courses - refusing to seed again.");
+    await connection.end();
+    return;
+  }
+
+  console.log("Connected to Postgres. Starting seed (v2: atomic slots)...");
 
   const scheduleMap = buildScheduleMap();
 
@@ -80,7 +81,8 @@ async function seed() {
     const [result] = await connection.execute(
       `INSERT INTO Slot (slot_code, slot_type)
        VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE slot_id = LAST_INSERT_ID(slot_id)`,
+       ON CONFLICT (slot_code) DO UPDATE SET slot_code = EXCLUDED.slot_code
+       RETURNING slot_id`,
       [atomicCode, slotType]
     );
     const slotId = result.insertId;
@@ -90,9 +92,10 @@ async function seed() {
     const occurrences = scheduleMap[atomicCode] || [];
     for (const occ of occurrences) {
       await connection.execute(
-        `INSERT IGNORE INTO SlotSchedule (slot_id, day_of_week, start_time, end_time)
-         VALUES (?, ?, ?, ?)`,
-        [slotId, occ.day, toMySQLTime(occ.start), toMySQLTime(occ.end)]
+        `INSERT INTO SlotSchedule (slot_id, day_of_week, start_time, end_time)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+        [slotId, occ.day, toSqlTime(occ.start), toSqlTime(occ.end)]
       );
     }
 
@@ -127,7 +130,8 @@ async function seed() {
           const [profResult] = await connection.execute(
             `INSERT INTO Professor (name, department)
              VALUES (?, ?)
-             ON DUPLICATE KEY UPDATE professor_id = LAST_INSERT_ID(professor_id)`,
+             ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+             RETURNING professor_id`,
             [offering.f, "SCOPE"]
           );
           professorId = profResult.insertId;
@@ -149,7 +153,7 @@ async function seed() {
         for (const atomicCode of atomicCodes) {
           const slotId = await getOrCreateSlot(atomicCode);
           await connection.execute(
-            `INSERT IGNORE INTO OfferingSlot (offering_id, slot_id) VALUES (?, ?)`,
+            `INSERT INTO OfferingSlot (offering_id, slot_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
             [offeringId, slotId]
           );
         }

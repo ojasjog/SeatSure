@@ -11,10 +11,10 @@ const pool = require("./db");
 const { generateToken, authenticateToken, requireStudent } = require("./auth");
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
 app.use(express.json());
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 // ------------------------------------------------------------
 // Socket.IO — live seat counter
@@ -24,7 +24,7 @@ const PORT = 5000;
 // just registered.
 // ------------------------------------------------------------
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { cors: { origin: process.env.CORS_ORIGIN || "*" } });
 
 io.on("connection", (socket) => {
   // No per-socket state needed — this is a broadcast-only channel.
@@ -105,7 +105,7 @@ app.post("/api/auth/signup", async (req, res) => {
     await connection.beginTransaction();
 
     const [existing] = await connection.query(
-      `SELECT user_id FROM User WHERE username = ?`,
+      `SELECT user_id FROM "User" WHERE username = ?`,
       [username]
     );
     if (existing.length > 0) {
@@ -127,7 +127,7 @@ app.post("/api/auth/signup", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const [userResult] = await connection.query(
-      `INSERT INTO User (username, password_hash, role) VALUES (?, ?, 'student')`,
+      `INSERT INTO "User" (username, password_hash, role) VALUES (?, ?, 'student')`,
       [username, passwordHash]
     );
     const userId = userResult.insertId;
@@ -191,7 +191,7 @@ app.post("/api/auth/login", async (req, res) => {
     const [rows] = await pool.query(
       `SELECT u.user_id, u.username, u.password_hash, u.role,
               s.student_id, s.name, s.reg_no, s.branch, s.semester
-       FROM User u
+       FROM "User" u
        LEFT JOIN Student s ON s.user_id = u.user_id
        WHERE u.username = ?`,
       [username]
@@ -235,7 +235,7 @@ app.get("/api/auth/me", authenticateToken, async (req, res) => {
     const [rows] = await pool.query(
       `SELECT s.student_id, s.user_id, u.username, s.name, s.reg_no, s.branch, s.semester
        FROM Student s
-       JOIN User u ON u.user_id = s.user_id
+       JOIN "User" u ON u.user_id = s.user_id
        WHERE s.student_id = ?`,
       [req.user.student_id]
     );
@@ -521,7 +521,7 @@ app.get("/api/courses/:id/professors", async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT p.professor_id, p.name, co.offering_id, co.course_type, co.venue,
-              GROUP_CONCAT(s.slot_code SEPARATOR '+') AS slot_codes
+              string_agg(s.slot_code, '+') AS slot_codes
        FROM CourseOffering co
        JOIN Professor p ON co.professor_id = p.professor_id
        JOIN OfferingSlot os ON co.offering_id = os.offering_id
@@ -846,7 +846,7 @@ app.get("/api/ffcs/options", authenticateToken, requireStudent, async (req, res)
     await pool.query(
       `INSERT INTO RegistrationProgress (student_id, current_course_index, status)
        VALUES (?, 0, 'in_progress')
-       ON DUPLICATE KEY UPDATE status = IF(status = 'not_started', 'in_progress', status)`,
+       ON CONFLICT (student_id) DO UPDATE SET status = CASE WHEN RegistrationProgress.status = 'not_started' THEN 'in_progress' ELSE RegistrationProgress.status END`,
       [studentId]
     );
 
@@ -1244,7 +1244,7 @@ app.get("/api/ffcs/summary", authenticateToken, requireStudent, async (req, res)
 
     const [enrolledRows] = await pool.query(
       `SELECT co.course_id, co.course_type, co.venue, p.name AS professor_name,
-              GROUP_CONCAT(DISTINCT s.slot_code SEPARATOR '+') AS slot_codes
+              string_agg(DISTINCT s.slot_code, '+') AS slot_codes
        FROM Enrollment e
        JOIN CourseOffering co ON e.offering_id = co.offering_id
        JOIN Professor p ON co.professor_id = p.professor_id

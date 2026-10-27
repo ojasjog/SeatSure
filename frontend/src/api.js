@@ -1,6 +1,7 @@
 import axios from "axios";
 
-const API_BASE = "http://localhost:5000/api";
+const SERVER_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+const API_BASE = `${SERVER_URL}/api`;
 export const TOKEN_KEY = "seatsure_token";
 
 const client = axios.create({ baseURL: API_BASE });
@@ -63,4 +64,4 @@ export const getMyPreferences = () =>
 
 export const resetMyFFCS = () => client.post("/student/reset-ffcs");
 
-export const SOCKET_URL = "http://localhost:5000";
+export const SOCKET_URL = SERVER_URL;

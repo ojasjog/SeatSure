@@ -16,15 +16,10 @@
 // Run with: node database/resetSimulation.js
 // ============================================================
 
-const mysql = require("mysql2/promise");
+const pool = require("../backend/db");
 
 async function resetSimulation() {
-  const connection = await mysql.createConnection({
-    host: "localhost",
-    user: process.env.DB_USER, // match your backend/db.js user
-    password: process.env.DB_PASSWORD, // match your backend/db.js password
-    database: "seatsure",
-  });
+  const connection = await pool.getConnection();
 
   console.log("Resetting FFCS simulation state...");
 
@@ -53,7 +48,8 @@ async function resetSimulation() {
     await connection.rollback();
     console.error("Reset failed:", err);
   } finally {
-    await connection.end();
+    connection.release();
+    await pool.end();
   }
 }
 
