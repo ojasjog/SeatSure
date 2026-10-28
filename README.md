@@ -152,9 +152,23 @@ Live seat counts are also pushed to all connected clients via the `seats:update`
 
 ---
 
+## Course Reviews
+
+A review space where **only students who enrolled in *and completed* a course can post**. Eligibility is checked on the server for every write: the student needs a `confirmed` enrollment (with that professor) whose `Enrollment.completed_at` is set. Everyone can read reviews; reviewers appear anonymously as "Verified student". One review per student per course per professor, editable and deletable by its author.
+
+Because the simulator has no real semester lifecycle, completion is set manually:
+
+```
+node database/markCompleted.js --all                       # finish everything
+node database/markCompleted.js --course CSE1001            # one course
+node database/markCompleted.js --reg 21BCE0001             # one student
+node database/markCompleted.js --undo --all                # re-lock reviews
+```
+
+Existing databases: run `database/migrations/002_reviews.sql` once (adds `Enrollment.completed_at`, rebuilds the unused `Review` table).
+
 ## Known Gaps / Next Steps
 
 - Wire up the **Waitlist** page to the existing `Waitlist` table and `/api/register` waitlist path.
-- No API/UI yet for the `Review` table (post-enrollment course ratings).
 - No admin role/UI — `User.role` supports `'admin'` in the schema but nothing currently uses it.
 - No automated tests yet (`npm test` is unset up in both `backend` and root `package.json`).

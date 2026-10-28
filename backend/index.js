@@ -8,7 +8,7 @@ const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const pool = require("./db");
-const { generateToken, authenticateToken, requireStudent } = require("./auth");
+const { generateToken, authenticateToken, requireStudent, requireAdmin } = require("./auth");
 
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
@@ -1294,6 +1294,298 @@ app.get("/api/ffcs/summary", authenticateToken, requireStudent, async (req, res)
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to load summary" });
+  }
+});
+
+// ============================================================
+// REVIEWS
+//
+// Rule: a student may review a course (for a given professor) only if
+// they have a CONFIRMED enrollment with that professor whose
+// Enrollment.completed_at is set. The check is enforced here on the
+// server for every write — the UI hiding the form is just a courtesy.
+// Reviews are shown anonymously ("verified student"), never by name.
+// ============================================================
+const REVIEW_MAX_LEN = 1000;
+
+// Professors this student is allowed to review for a course.
+async function getReviewableProfessors(db, studentId, courseId) {
+  const [rows] = await db.query(
+    `SELECT DISTINCT p.professor_id, p.name AS professor_name
+     FROM Enrollment e
+     JOIN CourseOffering co ON co.offering_id = e.offering_id
+     JOIN Professor p ON p.professor_id = co.professor_id
+     WHERE e.student_id = ? AND co.course_id = ?
+       AND e.status = 'confirmed' AND e.completed_at IS NOT NULL
+     ORDER BY p.name`,
+    [studentId, courseId]
+  );
+  return rows;
+}
+
+// Validates { rating, comment } from a request body.
+function parseReviewBody(body) {
+  const rating = Number(body?.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return { error: "rating must be a whole number from 1 to 5" };
+  }
+  let comment = body?.comment;
+  if (comment !== undefined && comment !== null && typeof comment !== "string") {
+    return { error: "comment must be text" };
+  }
+  comment = (comment || "").trim();
+  if (comment.length > REVIEW_MAX_LEN) {
+    return { error: `comment must be at most ${REVIEW_MAX_LEN} characters` };
+  }
+  return { rating, comment: comment || null };
+}
+
+const round1 = (n) => Math.round(n * 10) / 10;
+
+// ------------------------------------------------------------
+// GET /api/reviews/courses
+// Every course with its review count + average rating, and whether
+// the logged-in student has completed it (`completed`).
+// ------------------------------------------------------------
+app.get("/api/reviews/courses", authenticateToken, async (req, res) => {
+  try {
+    const studentId = req.user.student_id || null;
+    const [rows] = await pool.query(
+      `SELECT c.course_id, c.course_code, c.course_name, c.credits,
+              COUNT(r.review_id) AS review_count,
+              ROUND(AVG(r.rating)::numeric, 1) AS avg_rating,
+              EXISTS (
+                SELECT 1 FROM Enrollment e
+                JOIN CourseOffering co ON co.offering_id = e.offering_id
+                WHERE e.student_id = ? AND co.course_id = c.course_id
+                  AND e.status = 'confirmed' AND e.completed_at IS NOT NULL
+              ) AS completed
+       FROM Course c
+       LEFT JOIN Review r ON r.course_id = c.course_id
+       GROUP BY c.course_id
+       ORDER BY c.course_code`,
+      [studentId]
+    );
+    res.json(
+      rows.map((r) => ({
+        ...r,
+        avg_rating: r.avg_rating === null ? null : Number(r.avg_rating),
+      }))
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load courses" });
+  }
+});
+
+// ------------------------------------------------------------
+// GET /api/courses/:id/reviews
+// Reviews + summary for one course, plus (for students) what they're
+// allowed to do: which professors they can review, and why not if none.
+// ------------------------------------------------------------
+app.get("/api/courses/:id/reviews", authenticateToken, async (req, res) => {
+  const courseId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(courseId)) {
+    return res.status(400).json({ error: "Invalid course id" });
+  }
+  const studentId = req.user.student_id || null;
+
+  try {
+    const [[course]] = await pool.query(
+      `SELECT course_id, course_code, course_name, credits FROM Course WHERE course_id = ?`,
+      [courseId]
+    );
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
+    const [rows] = await pool.query(
+      `SELECT r.review_id, r.student_id, r.professor_id, p.name AS professor_name,
+              r.rating, r.comment, r.created_at, r.updated_at
+       FROM Review r
+       JOIN Professor p ON p.professor_id = r.professor_id
+       WHERE r.course_id = ?
+       ORDER BY r.created_at DESC
+       LIMIT 500`,
+      [courseId]
+    );
+
+    // Strip student_id so reviewers stay anonymous; keep only an is_mine flag.
+    const reviews = rows.map(({ student_id, ...rest }) => ({
+      ...rest,
+      is_mine: studentId !== null && student_id === studentId,
+    }));
+
+    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    const byProf = new Map();
+    for (const r of reviews) {
+      distribution[r.rating] += 1;
+      if (!byProf.has(r.professor_id)) {
+        byProf.set(r.professor_id, { professor_id: r.professor_id, professor_name: r.professor_name, review_count: 0, sum: 0 });
+      }
+      const agg = byProf.get(r.professor_id);
+      agg.review_count += 1;
+      agg.sum += r.rating;
+    }
+    const total = reviews.reduce((sum, r) => sum + r.rating, 0);
+
+    let eligibility = null;
+    if (studentId) {
+      const reviewable = await getReviewableProfessors(pool, studentId, courseId);
+      const mine = new Map(reviews.filter((r) => r.is_mine).map((r) => [r.professor_id, r.review_id]));
+
+      let reason = "completed";
+      if (reviewable.length === 0) {
+        const [[pending]] = await pool.query(
+          `SELECT 1 AS x FROM Enrollment e
+           JOIN CourseOffering co ON co.offering_id = e.offering_id
+           WHERE e.student_id = ? AND co.course_id = ?
+             AND e.status = 'confirmed' AND e.completed_at IS NULL
+           LIMIT 1`,
+          [studentId, courseId]
+        );
+        reason = pending ? "in_progress" : "not_enrolled";
+      }
+
+      eligibility = {
+        can_review: reviewable.length > 0,
+        reason,
+        reviewable: reviewable.map((p) => ({ ...p, my_review_id: mine.get(p.professor_id) || null })),
+      };
+    }
+
+    res.json({
+      course,
+      summary: {
+        review_count: reviews.length,
+        avg_rating: reviews.length ? round1(total / reviews.length) : null,
+        distribution,
+        professors: [...byProf.values()]
+          .map(({ sum, ...p }) => ({ ...p, avg_rating: round1(sum / p.review_count) }))
+          .sort((a, b) => a.professor_name.localeCompare(b.professor_name)),
+      },
+      reviews,
+      eligibility,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load reviews" });
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/courses/:id/reviews
+// Body: { professor_id, rating, comment? }
+// ------------------------------------------------------------
+app.post("/api/courses/:id/reviews", authenticateToken, requireStudent, async (req, res) => {
+  const courseId = parseInt(req.params.id, 10);
+  const professorId = parseInt(req.body?.professor_id, 10);
+  if (!Number.isInteger(courseId) || !Number.isInteger(professorId)) {
+    return res.status(400).json({ error: "course id and professor_id are required" });
+  }
+  const parsed = parseReviewBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+  const studentId = req.user.student_id;
+  try {
+    const reviewable = await getReviewableProfessors(pool, studentId, courseId);
+    if (!reviewable.some((p) => p.professor_id === professorId)) {
+      return res.status(403).json({
+        error: "You can only review a course and professor you have enrolled in and completed.",
+      });
+    }
+
+    const [result] = await pool.query(
+      `INSERT INTO Review (student_id, course_id, professor_id, rating, comment)
+       VALUES (?, ?, ?, ?, ?)`,
+      [studentId, courseId, professorId, parsed.rating, parsed.comment]
+    );
+    res.status(201).json({ review_id: result.insertId });
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(409).json({ error: "You have already reviewed this professor for this course. Edit your review instead." });
+    }
+    console.error(err);
+    res.status(500).json({ error: "Failed to post review" });
+  }
+});
+
+// ------------------------------------------------------------
+// PUT /api/reviews/:id — edit your own review. Body: { rating, comment? }
+// ------------------------------------------------------------
+app.put("/api/reviews/:id", authenticateToken, requireStudent, async (req, res) => {
+  const reviewId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(reviewId)) return res.status(400).json({ error: "Invalid review id" });
+  const parsed = parseReviewBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+  try {
+    const [result] = await pool.query(
+      `UPDATE Review SET rating = ?, comment = ?, updated_at = now()
+       WHERE review_id = ? AND student_id = ?`,
+      [parsed.rating, parsed.comment, reviewId, req.user.student_id]
+    );
+    if (result.affectedRows === 0) return res.status(404).json({ error: "Review not found" });
+    res.json({ review_id: reviewId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update review" });
+  }
+});
+
+// ------------------------------------------------------------
+// DELETE /api/reviews/:id — delete your own review (admins: any review)
+// ------------------------------------------------------------
+app.delete("/api/reviews/:id", authenticateToken, async (req, res) => {
+  const reviewId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(reviewId)) return res.status(400).json({ error: "Invalid review id" });
+
+  try {
+    const isAdmin = req.user.role === "admin";
+    if (!isAdmin && !req.user.student_id) {
+      return res.status(403).json({ error: "Student account required" });
+    }
+    const [result] = isAdmin
+      ? await pool.query(`DELETE FROM Review WHERE review_id = ?`, [reviewId])
+      : await pool.query(`DELETE FROM Review WHERE review_id = ? AND student_id = ?`, [reviewId, req.user.student_id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: "Review not found" });
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete review" });
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/admin/enrollments/complete   (admin only)
+// Body: { course_id?, student_id?, all? } — marks matching confirmed
+// enrollments as completed, which unlocks reviews for those students.
+// At least one filter (or all: true) is required, to avoid accidents.
+// ------------------------------------------------------------
+app.post("/api/admin/enrollments/complete", authenticateToken, requireAdmin, async (req, res) => {
+  const { course_id, student_id, all } = req.body || {};
+  if (course_id == null && student_id == null && all !== true) {
+    return res.status(400).json({ error: "Provide course_id and/or student_id, or all: true" });
+  }
+
+  const where = [`status = 'confirmed'`, `completed_at IS NULL`];
+  const params = [];
+  if (student_id != null) {
+    where.push(`student_id = ?`);
+    params.push(student_id);
+  }
+  if (course_id != null) {
+    where.push(`offering_id IN (SELECT offering_id FROM CourseOffering WHERE course_id = ?)`);
+    params.push(course_id);
+  }
+
+  try {
+    const [result] = await pool.query(
+      `UPDATE Enrollment SET completed_at = now() WHERE ${where.join(" AND ")}`,
+      params
+    );
+    res.json({ completed: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to mark enrollments completed" });
   }
 });
 

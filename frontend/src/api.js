@@ -64,4 +64,20 @@ export const getMyPreferences = () =>
 
 export const resetMyFFCS = () => client.post("/student/reset-ffcs");
 
+// ---- Reviews (posting requires a completed enrollment; enforced server-side) ----
+export const getReviewCourses = () =>
+  client.get("/reviews/courses").then((r) => r.data);
+
+export const getCourseReviews = (courseId) =>
+  client.get(`/courses/${courseId}/reviews`).then((r) => r.data);
+
+export const postReview = (courseId, payload) =>
+  client.post(`/courses/${courseId}/reviews`, payload).then((r) => r.data);
+
+export const updateReview = (reviewId, payload) =>
+  client.put(`/reviews/${reviewId}`, payload).then((r) => r.data);
+
+export const deleteReview = (reviewId) =>
+  client.delete(`/reviews/${reviewId}`).then((r) => r.data);
+
 export const SOCKET_URL = SERVER_URL;

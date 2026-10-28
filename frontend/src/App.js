@@ -15,6 +15,7 @@ import Landing from "./components/Landing";
 import TimetableGrid from "./components/TimetableGrid";
 import FFCSPage from "./components/FFCSPage";
 import WaitlistPage from "./components/Waitlist";
+import ReviewsPage from "./components/ReviewsPage";
 import html2canvas from "html2canvas";
 import "./App.css";const COURSE_COLORS = [
   "#D7C6A7", "#BCCAB8", "#D8BDB8", "#CAC9C1",
@@ -1843,7 +1844,7 @@ function Dashboard({ student, onLogout, onBack }) {
 function App() {
   const [student, setStudent] = useState(null);
   const [checkingSession, setCheckingSession] = useState(true);
-  const [view, setView] = useState("landing"); // "landing" | "preffcs" | "ffcs" | "waitlist"
+  const [view, setView] = useState("landing"); // "landing" | "preffcs" | "ffcs" | "waitlist" | "reviews"
 
   useEffect(() => {
     const token = localStorage.getItem(TOKEN_KEY);
@@ -1893,6 +1894,10 @@ function App() {
 
   if (view === "ffcs") {
     return <FFCSPage onBack={() => setView("landing")} />;
+  }
+
+  if (view === "reviews") {
+    return <ReviewsPage onBack={() => setView("landing")} />;
   }
 
   if (view === "waitlist") {

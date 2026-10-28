@@ -60,4 +60,12 @@ function requireStudent(req, res, next) {
   next();
 }
 
-module.exports = { generateToken, authenticateToken, requireStudent, JWT_SECRET };
+// Guard for admin-only routes (e.g. marking enrollments as completed).
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({ error: "Admin account required" });
+  }
+  next();
+}
+
+module.exports = { generateToken, authenticateToken, requireStudent, requireAdmin, JWT_SECRET };

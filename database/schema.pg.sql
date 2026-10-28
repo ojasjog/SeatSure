@@ -86,6 +86,7 @@ CREATE TABLE Enrollment (
     offering_id INT NOT NULL REFERENCES CourseOffering(offering_id) ON DELETE CASCADE,
     enrollment_date TIMESTAMPTZ DEFAULT now(),
     status TEXT DEFAULT 'confirmed' CHECK (status IN ('confirmed','cancelled')),
+    completed_at TIMESTAMPTZ,  -- set when the student has finished the course; unlocks reviews
     UNIQUE (student_id, offering_id)
 );
 
@@ -99,11 +100,17 @@ CREATE TABLE Waitlist (
 
 CREATE TABLE Review (
     review_id SERIAL PRIMARY KEY,
-    enrollment_id INT NOT NULL UNIQUE REFERENCES Enrollment(enrollment_id) ON DELETE CASCADE,
+    student_id INT NOT NULL REFERENCES Student(student_id) ON DELETE CASCADE,
+    course_id INT NOT NULL REFERENCES Course(course_id) ON DELETE CASCADE,
+    professor_id INT NOT NULL REFERENCES Professor(professor_id) ON DELETE CASCADE,
     rating INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
-    comment TEXT,
-    review_date TIMESTAMPTZ DEFAULT now()
+    comment TEXT CHECK (comment IS NULL OR char_length(comment) <= 1000),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (student_id, course_id, professor_id)
 );
+
+CREATE INDEX idx_review_course ON Review(course_id);
 
 CREATE TABLE RegistrationProgress (
     student_id INT PRIMARY KEY REFERENCES Student(student_id) ON DELETE CASCADE,
