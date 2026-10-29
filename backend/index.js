@@ -1589,6 +1589,278 @@ app.post("/api/admin/enrollments/complete", authenticateToken, requireAdmin, asy
   }
 });
 
+// ------------------------------------------------------------
+// Add & Drop — course-level waitlist queue
+//
+// Students join (or leave) a queue for a COURSE they didn't get a
+// seat in — any professor's section is acceptable, so the queue is
+// keyed by course_id, not one offering. Joining is only allowed
+// inside a short scheduled window (ADDDROP_START_TIME, for
+// ADDDROP_WINDOW_MINUTES minutes) — same idea as the FFCS turn
+// clock above, just one shared window instead of per-student turns.
+//
+// Dropping a currently-confirmed course needs no window and no
+// queue — it's instant, and it's the event that frees a seat and
+// triggers promoteAddDropQueue() below.
+// ------------------------------------------------------------
+const ADDDROP_START_TIME = process.env.ADDDROP_START_TIME
+  ? new Date(process.env.ADDDROP_START_TIME)
+  : null;
+const ADDDROP_WINDOW_MINUTES = Number(process.env.ADDDROP_WINDOW_MINUTES || 30);
+
+function getAddDropWindow() {
+  if (!ADDDROP_START_TIME) {
+    return { configured: false, open: false, opens_at: null, closes_at: null };
+  }
+  const closesAt = new Date(ADDDROP_START_TIME.getTime() + ADDDROP_WINDOW_MINUTES * 60 * 1000);
+  const now = new Date();
+  return {
+    configured: true,
+    open: now >= ADDDROP_START_TIME && now < closesAt,
+    opens_at: ADDDROP_START_TIME.toISOString(),
+    closes_at: closesAt.toISOString(),
+  };
+}
+
+// Re-numbers a course's queue to a clean 1..N sequence after any
+// join/leave/promotion, so positions never show gaps.
+async function renumberAddDropQueue(connection, courseId) {
+  const [rows] = await connection.query(
+    `SELECT waitlist_id FROM Waitlist WHERE course_id = ? ORDER BY queue_position ASC`,
+    [courseId]
+  );
+  for (let i = 0; i < rows.length; i++) {
+    await connection.query(
+      `UPDATE Waitlist SET queue_position = ? WHERE waitlist_id = ?`,
+      [i + 1, rows[i].waitlist_id]
+    );
+  }
+}
+
+// Called right after a seat on `offeringId` (course `courseId`) has
+// just been freed, inside the same transaction that freed it. Walks
+// the course's queue in position order; for each student, checks
+// the freed offering's slots against their REAL confirmed FFCS
+// timetable (not any draft/preference data). The first student who
+// doesn't clash gets the seat; anyone who clashes is skipped and
+// stays queued.
+async function promoteAddDropQueue(connection, offeringId, courseId) {
+  const [[offering]] = await connection.query(
+    `SELECT seats_remaining FROM CourseOffering WHERE offering_id = ?`,
+    [offeringId]
+  );
+  if (!offering || offering.seats_remaining <= 0) return null;
+
+  const [queue] = await connection.query(
+    `SELECT waitlist_id, student_id FROM Waitlist WHERE course_id = ? ORDER BY queue_position ASC`,
+    [courseId]
+  );
+
+  for (const entry of queue) {
+    const [clashes] = await connection.query(
+      `SELECT 1
+       FROM Enrollment e
+       JOIN OfferingSlot os1 ON e.offering_id = os1.offering_id
+       JOIN OfferingSlot os2 ON os1.slot_id = os2.slot_id
+       WHERE e.student_id = ? AND e.status = 'confirmed' AND os2.offering_id = ?
+       LIMIT 1`,
+      [entry.student_id, offeringId]
+    );
+    if (clashes.length > 0) continue; // clashes with their real timetable -> leave queued, try next
+
+    await connection.query(
+      `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
+      [offeringId]
+    );
+    await connection.query(
+      `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
+      [entry.student_id, offeringId]
+    );
+    await connection.query(`DELETE FROM Waitlist WHERE waitlist_id = ?`, [entry.waitlist_id]);
+    await renumberAddDropQueue(connection, courseId);
+    return entry.student_id; // only one seat was freed -> promote exactly one student
+  }
+
+  return null; // nobody queued fits this slot -> seat stays open
+}
+
+// ------------------------------------------------------------
+// GET /api/addrop/me
+// Missing courses (+ your queue position in each, if queued) for
+// the Add card, and your currently-confirmed courses for the Drop
+// card, plus whether the Pre-Add&Drop window is open right now.
+// ------------------------------------------------------------
+app.get("/api/addrop/me", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  try {
+    const [missing] = await pool.query(
+      `SELECT c.course_id, c.course_code, c.course_name,
+              w.waitlist_id, w.queue_position
+       FROM Course c
+       LEFT JOIN Waitlist w ON w.course_id = c.course_id AND w.student_id = ?
+       WHERE c.course_id NOT IN (
+         SELECT co.course_id FROM Enrollment e
+         JOIN CourseOffering co ON e.offering_id = co.offering_id
+         WHERE e.student_id = ? AND e.status = 'confirmed'
+       )
+       ORDER BY c.course_code`,
+      [studentId, studentId]
+    );
+
+    const [enrolled] = await pool.query(
+      `SELECT e.offering_id, c.course_id, c.course_code, c.course_name,
+              p.name AS professor, co.venue, co.course_type
+       FROM Enrollment e
+       JOIN CourseOffering co ON e.offering_id = co.offering_id
+       JOIN Course c ON co.course_id = c.course_id
+       JOIN Professor p ON co.professor_id = p.professor_id
+       WHERE e.student_id = ? AND e.status = 'confirmed'
+       ORDER BY c.course_code`,
+      [studentId]
+    );
+
+    res.json({
+      window: getAddDropWindow(),
+      missing: missing.map((m) => ({
+        course_id: m.course_id,
+        course_code: m.course_code,
+        course_name: m.course_name,
+        queued: m.waitlist_id != null,
+        queue_position: m.queue_position,
+      })),
+      enrolled,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load Add & Drop status" });
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/addrop/queue/:courseId  — join the Add queue
+// Only inside the Pre-Add&Drop window, and only for a course you
+// aren't already confirmed-enrolled in.
+// ------------------------------------------------------------
+app.post("/api/addrop/queue/:courseId", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  const courseId = Number(req.params.courseId);
+
+  const win = getAddDropWindow();
+  if (!win.open) {
+    return res.status(403).json({ error: "The Pre-Add&Drop window is not open right now.", window: win });
+  }
+
+  try {
+    const [[already]] = await pool.query(
+      `SELECT 1 FROM Enrollment e
+       JOIN CourseOffering co ON e.offering_id = co.offering_id
+       WHERE e.student_id = ? AND e.status = 'confirmed' AND co.course_id = ?`,
+      [studentId, courseId]
+    );
+    if (already) {
+      return res.status(409).json({ error: "You're already enrolled in this course." });
+    }
+
+    const [[existing]] = await pool.query(
+      `SELECT waitlist_id, queue_position FROM Waitlist WHERE student_id = ? AND course_id = ?`,
+      [studentId, courseId]
+    );
+    if (existing) {
+      return res.json({ status: "already_queued", queue_position: existing.queue_position });
+    }
+
+    const [[max]] = await pool.query(
+      `SELECT COALESCE(MAX(queue_position), 0) AS max_pos FROM Waitlist WHERE course_id = ?`,
+      [courseId]
+    );
+    const position = max.max_pos + 1;
+
+    await pool.query(
+      `INSERT INTO Waitlist (student_id, course_id, queue_position) VALUES (?, ?, ?)`,
+      [studentId, courseId, position]
+    );
+
+    res.json({ status: "queued", queue_position: position });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to join the queue" });
+  }
+});
+
+// ------------------------------------------------------------
+// DELETE /api/addrop/queue/:courseId  — leave a queue you joined
+// ------------------------------------------------------------
+app.delete("/api/addrop/queue/:courseId", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  const courseId = Number(req.params.courseId);
+
+  try {
+    await pool.query(`DELETE FROM Waitlist WHERE student_id = ? AND course_id = ?`, [studentId, courseId]);
+    await renumberAddDropQueue(pool, courseId);
+    res.json({ status: "left_queue" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to leave the queue" });
+  }
+});
+
+// ------------------------------------------------------------
+// POST /api/addrop/drop/:offeringId  — drop a confirmed course
+// No window, no queue needed — this is the event that frees a seat
+// and immediately triggers promoteAddDropQueue() for that course.
+// ------------------------------------------------------------
+app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, async (req, res) => {
+  const studentId = req.user.student_id;
+  const offeringId = Number(req.params.offeringId);
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [[enrollment]] = await connection.query(
+      `SELECT enrollment_id FROM Enrollment
+       WHERE student_id = ? AND offering_id = ? AND status = 'confirmed' FOR UPDATE`,
+      [studentId, offeringId]
+    );
+    if (!enrollment) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ error: "You aren't confirmed in this course offering." });
+    }
+
+    const [[offering]] = await connection.query(
+      `SELECT course_id FROM CourseOffering WHERE offering_id = ? FOR UPDATE`,
+      [offeringId]
+    );
+
+    await connection.query(
+      `UPDATE Enrollment SET status = 'cancelled' WHERE enrollment_id = ?`,
+      [enrollment.enrollment_id]
+    );
+    await connection.query(
+      `UPDATE CourseOffering SET seats_remaining = seats_remaining + 1 WHERE offering_id = ?`,
+      [offeringId]
+    );
+
+    const promotedStudentId = await promoteAddDropQueue(connection, offeringId, offering.course_id);
+
+    await connection.commit();
+    connection.release();
+
+    emitSeatUpdate(offeringId);
+
+    res.json({
+      status: "dropped",
+      promoted_student_id: promotedStudentId,
+    });
+  } catch (err) {
+    await connection.rollback();
+    connection.release();
+    console.error(err);
+    res.status(500).json({ error: "Failed to drop this course" });
+  }
+});
+
 server.listen(PORT, () => {
   console.log(`SeatSure backend running on http://localhost:${PORT}`);
   console.log(

@@ -80,4 +80,17 @@ export const updateReview = (reviewId, payload) =>
 export const deleteReview = (reviewId) =>
   client.delete(`/reviews/${reviewId}`).then((r) => r.data);
 
+// ---- Add & Drop ----
+export const getAddDropStatus = () =>
+  client.get("/addrop/me").then((r) => r.data);
+
+export const joinAddDropQueue = (courseId) =>
+  client.post(`/addrop/queue/${courseId}`).then((r) => r.data);
+
+export const leaveAddDropQueue = (courseId) =>
+  client.delete(`/addrop/queue/${courseId}`).then((r) => r.data);
+
+export const dropCourse = (offeringId) =>
+  client.post(`/addrop/drop/${offeringId}`).then((r) => r.data);
+
 export const SOCKET_URL = SERVER_URL;

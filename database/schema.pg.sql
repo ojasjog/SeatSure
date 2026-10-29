@@ -93,10 +93,14 @@ CREATE TABLE Enrollment (
 CREATE TABLE Waitlist (
     waitlist_id SERIAL PRIMARY KEY,
     student_id INT NOT NULL REFERENCES Student(student_id) ON DELETE CASCADE,
-    offering_id INT NOT NULL REFERENCES CourseOffering(offering_id) ON DELETE CASCADE,
+    course_id INT NOT NULL REFERENCES Course(course_id) ON DELETE CASCADE,
+    offering_id INT REFERENCES CourseOffering(offering_id) ON DELETE CASCADE,  -- set only by the legacy FFCS-full path; Add&Drop queues by course, not one section
     queue_position INT NOT NULL,
-    date_added TIMESTAMPTZ DEFAULT now()
+    date_added TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (student_id, course_id)
 );
+
+CREATE INDEX idx_waitlist_course ON Waitlist(course_id);
 
 CREATE TABLE Review (
     review_id SERIAL PRIMARY KEY,

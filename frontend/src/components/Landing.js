@@ -5,8 +5,7 @@ import "./Landing.css";
 // LANDING
 // The first screen after login. Splits registration into its
 // three real stages (plus a reviews space) instead of dropping the student straight
-// into Pre-FFCS. Only Pre-FFCS and FFCS are wired for Review 2;
-// Waitlist is a placeholder button.
+// Pre-FFCS, FFCS, Reviews, and Waitlist (Add & Drop) are all wired.
 // =========================================================
 
 function Landing({ student, onSelect, onLogout }) {
@@ -67,23 +66,21 @@ function Landing({ student, onSelect, onLogout }) {
             <span className="landing-card-arrow">→</span>
           </button>
 
-          <button
+            <button
             type="button"
-            className="landing-card landing-card-soon"
+            className="landing-card"
             onClick={() => onSelect("waitlist")}
           >
             <div className="landing-card-icon">3</div>
-            <div className="landing-card-title">
-              Waitlist
-              <span className="landing-card-badge">Coming soon</span>
-            </div>
+            <div className="landing-card-title">Waitlist</div>
             <div className="landing-card-desc">
-              Track your queue position for any offering that filled up
-              during FFCS.
+              Missed a course? Join the queue to add it, or drop a course
+              you no longer want — Add & Drop in one place.
             </div>
             <span className="landing-card-arrow">→</span>
           </button>
-          <button
+              
+              <button
             type="button"
             className="landing-card"
             onClick={() => onSelect("reviews")}

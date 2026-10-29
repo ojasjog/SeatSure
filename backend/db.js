@@ -10,6 +10,8 @@
 // ============================================================
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first"); // avoid hanging on broken IPv6 routes to Supabase
 const { Pool, types } = require("pg");
 
 // COUNT(*) etc. come back as bigint -> string by default. Make them numbers.
@@ -24,6 +26,7 @@ const pool = new Pool({
   // Supabase requires SSL. Set DATABASE_SSL=false only for a local Postgres.
   ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
   max: 10,
+  connectionTimeoutMillis: 10000, // fail with a clear error after 10s instead of hanging forever
 });
 
 const toPg = (sql) => {
