@@ -1656,7 +1656,7 @@ async function renumberAddDropQueue(connection, courseId) {
 // the Live Allotment window is open — otherwise it's a no-op and seats
 // stay "banked" until that window is open. Returns the list of
 // { student_id, offering_id } promotions actually made.
-async function runCourseAllotment(connection, courseId) {
+async function runCourseAllotment(connection, courseId, priorityOfferingId = null) {
   if (!getAllotWindow().open) return [];
 
   const [offerings] = await connection.query(
@@ -1664,6 +1664,17 @@ async function runCourseAllotment(connection, courseId) {
     [courseId]
   );
   if (offerings.length === 0) return [];
+
+  // Try the offering that was just freed (if any) before any other
+  // already-open offering of this course, so a drop visibly hands
+  // its own seat to the next queued student instead of a random one.
+  if (priorityOfferingId) {
+    offerings.sort((a, b) => {
+      if (a.offering_id === priorityOfferingId) return -1;
+      if (b.offering_id === priorityOfferingId) return 1;
+      return 0;
+    });
+  }
 
   const [queue] = await connection.query(
     `SELECT waitlist_id, student_id FROM Waitlist WHERE course_id = ? ORDER BY queue_position ASC`,
@@ -1908,8 +1919,8 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
       [offeringId]
     );
 
-    const promotions = await runCourseAllotment(connection, offering.course_id);
-
+    const promotions = await runCourseAllotment(connection, offering.course_id, offeringId);
+    
     await connection.commit();
     connection.release();
 
