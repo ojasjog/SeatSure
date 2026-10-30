@@ -1,61 +1,70 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { io } from "socket.io-client";
 import {
   getAddDropStatus,
   joinAddDropQueue,
   leaveAddDropQueue,
   dropCourse,
+  SOCKET_URL,
 } from "../api";
 import "./Waitlist.css";
 
-// =========================================================
-// WAITLIST  —  Add & Drop
-// Two cards: Add (join/leave a course-level queue, only while the
-// Pre-Add&Drop window is open) and Drop (give up a confirmed
-// course any time — no window, no queue needed).
-// =========================================================
-
-const errMsg = (err, fallback) => err?.response?.data?.error || fallback;
-
 function formatWindow(win) {
-  if (!win?.configured) return "The Add & Drop window hasn't been scheduled yet.";
+  if (!win || !win.configured) return "Not scheduled yet";
   const opens = new Date(win.opens_at);
   const closes = new Date(win.closes_at);
-  const fmt = (d) => d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-  if (win.open) return `Open now — closes ${fmt(closes)}.`;
+  const fmt = (d) =>
+    d.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  if (win.open) return `Open now — closes ${fmt(closes)}`;
   const now = new Date();
-  return now < opens
-    ? `Opens ${fmt(opens)}, closes ${fmt(closes)}.`
-    : `Closed — was open until ${fmt(closes)}.`;
+  if (now < opens) return `Opens ${fmt(opens)}`;
+  return `Closed — was open until ${fmt(closes)}`;
 }
 
-function WaitlistPage({ onBack }) {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
+export default function Waitlist() {
+  const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const [busyId, setBusyId] = useState(null); // course_id or offering_id currently being acted on
+  const [busyId, setBusyId] = useState(null);
+  const socketRef = useRef(null);
 
-  const load = useCallback(() => {
-    return getAddDropStatus()
-      .then((data) => {
-        setStatus(data);
-        setError("");
-      })
-      .catch((err) => setError(errMsg(err, "Couldn't load Add & Drop.")))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    try {
+      const res = await getAddDropStatus();
+      setData(res);
+      setError("");
+    } catch (err) {
+      setError("Failed to load Add & Drop status");
+    }
   }, []);
 
   useEffect(() => {
     load();
+    const socket = io(SOCKET_URL);
+    socketRef.current = socket;
+
+    socket.on("seats:update", () => load());
+    socket.on("addrop:promoted", () => load());
+
+    const interval = setInterval(load, 15000);
+
+    return () => {
+      socket.disconnect();
+      clearInterval(interval);
+    };
   }, [load]);
 
   const handleJoin = async (courseId) => {
     setBusyId(courseId);
-    setError("");
     try {
       await joinAddDropQueue(courseId);
       await load();
     } catch (err) {
-      setError(errMsg(err, "Couldn't join the queue."));
+      setError(err?.response?.data?.error || "Failed to join the queue");
     } finally {
       setBusyId(null);
     }
@@ -63,129 +72,130 @@ function WaitlistPage({ onBack }) {
 
   const handleLeave = async (courseId) => {
     setBusyId(courseId);
-    setError("");
     try {
       await leaveAddDropQueue(courseId);
       await load();
     } catch (err) {
-      setError(errMsg(err, "Couldn't leave the queue."));
+      setError(err?.response?.data?.error || "Failed to leave the queue");
     } finally {
       setBusyId(null);
     }
   };
 
-  const handleDrop = async (offeringId, courseName) => {
-    if (!window.confirm(`Drop ${courseName}? This frees your seat for the next person in that course's queue.`)) {
-      return;
-    }
+  const handleDrop = async (offeringId) => {
     setBusyId(offeringId);
-    setError("");
     try {
       await dropCourse(offeringId);
       await load();
     } catch (err) {
-      setError(errMsg(err, "Couldn't drop this course."));
+      setError(err?.response?.data?.error || "Failed to drop this course");
     } finally {
       setBusyId(null);
     }
   };
 
+  if (!data && !error) {
+    return <div className="ad-page">Loading Add & Drop…</div>;
+  }
+
+  const joinWindow = data?.join_window;
+  const allotWindow = data?.allot_window;
+
   return (
-    <div className="ad-shell">
-      <button type="button" className="ad-back" onClick={onBack}>← Home</button>
-
-      <h1 className="ad-title">Waitlist</h1>
-      <p className="ad-sub">Add a course you missed, or drop one you no longer want.</p>
-
-      {loading && <div className="ad-muted">Loading…</div>}
+    <div className="ad-page">
+      <h2 className="ad-title">Waitlist — Add &amp; Drop</h2>
       {error && <div className="ad-error">{error}</div>}
 
-      {status && (
-        <div className="ad-layout">
-          {/* ---------- ADD card ---------- */}
-          <section className="ad-card">
-            <div className="ad-card-head">
-              <h2>Add</h2>
-              <span className={`ad-window-chip ${status.window.open ? "open" : ""}`}>
-                {status.window.open ? "Window open" : "Window closed"}
-              </span>
-            </div>
-            <p className="ad-window-note">{formatWindow(status.window)}</p>
+      <div className="ad-cards">
+        <div className="ad-card">
+          <div className="ad-card-head">
+            <h3>Add</h3>
+            <span className={`ad-badge ${joinWindow?.open ? "ad-open" : "ad-closed"}`}>
+              {joinWindow?.open ? "Be-in-queue open" : "Be-in-queue closed"}
+            </span>
+          </div>
+          <p className="ad-window-label">{formatWindow(joinWindow)}</p>
+          <p className="ad-sub">
+            Join a course you missed in FFCS. You're queued for the course itself — any
+            non-clashing professor's section works.
+          </p>
 
-            {status.missing.length === 0 ? (
-              <div className="ad-empty">You have every course allotted. Nothing to add.</div>
-            ) : (
-              <ul className="ad-list">
-                {status.missing.map((c) => (
-                  <li key={c.course_id} className="ad-row">
-                    <div>
-                      <div className="ad-code">{c.course_code}</div>
-                      <div className="ad-name">{c.course_name}</div>
-                    </div>
-                    {c.queued ? (
-                      <div className="ad-row-actions">
-                        <span className="ad-position">#{c.queue_position} in line</span>
-                        <button
-                          type="button"
-                          className="ad-ghost danger"
-                          disabled={busyId === c.course_id}
-                          onClick={() => handleLeave(c.course_id)}
-                        >
-                          Leave queue
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="ad-primary"
-                        disabled={!status.window.open || busyId === c.course_id}
-                        onClick={() => handleJoin(c.course_id)}
-                        title={!status.window.open ? "Only available while the Pre-Add&Drop window is open" : undefined}
-                      >
-                        {busyId === c.course_id ? "Joining…" : "Be in queue"}
-                      </button>
+          <div className="ad-allot-note">
+            <span className={`ad-badge ${allotWindow?.open ? "ad-open" : "ad-closed"}`}>
+              {allotWindow?.open ? "Live allotment running" : "Live allotment not running"}
+            </span>
+            <span className="ad-sub">{formatWindow(allotWindow)}</span>
+          </div>
+
+          {data?.missing?.length === 0 ? (
+            <p className="ad-empty">You're enrolled in every course — nothing to add.</p>
+          ) : (
+            <ul className="ad-list">
+              {data?.missing?.map((m) => (
+                <li key={m.course_id} className="ad-list-item">
+                  <div>
+                    <strong>{m.course_code}</strong> — {m.course_name}
+                    {m.queued && (
+                      <div className="ad-position">Queue position: #{m.queue_position}</div>
                     )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/* ---------- DROP card ---------- */}
-          <section className="ad-card">
-            <div className="ad-card-head">
-              <h2>Drop</h2>
-            </div>
-            <p className="ad-window-note">Dropping works any time — no queue, no window.</p>
-
-            {status.enrolled.length === 0 ? (
-              <div className="ad-empty">You aren't enrolled in anything yet.</div>
-            ) : (
-              <ul className="ad-list">
-                {status.enrolled.map((c) => (
-                  <li key={c.offering_id} className="ad-row">
-                    <div>
-                      <div className="ad-code">{c.course_code} · {c.course_type}</div>
-                      <div className="ad-name">{c.course_name}</div>
-                      <div className="ad-meta">{c.professor} · {c.venue}</div>
-                    </div>
+                  </div>
+                  {m.queued ? (
                     <button
-                      type="button"
-                      className="ad-ghost danger"
-                      disabled={busyId === c.offering_id}
-                      onClick={() => handleDrop(c.offering_id, c.course_name)}
+                      className="ad-btn ad-btn-leave"
+                      disabled={busyId === m.course_id}
+                      onClick={() => handleLeave(m.course_id)}
                     >
-                      {busyId === c.offering_id ? "Dropping…" : "Drop"}
+                      Leave queue
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+                  ) : (
+                    <button
+                      className="ad-btn ad-btn-join"
+                      disabled={!joinWindow?.open || busyId === m.course_id}
+                      onClick={() => handleJoin(m.course_id)}
+                    >
+                      Be in queue
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      )}
+
+        <div className="ad-card">
+          <div className="ad-card-head">
+            <h3>Drop</h3>
+            <span className="ad-badge ad-open">Always open</span>
+          </div>
+          <p className="ad-sub">
+            Drop any course you're currently enrolled in. No window, no queue — it's instant.
+          </p>
+
+          {data?.enrolled?.length === 0 ? (
+            <p className="ad-empty">You aren't enrolled in anything yet.</p>
+          ) : (
+            <ul className="ad-list">
+              {data?.enrolled?.map((e) => (
+                <li key={e.offering_id} className="ad-list-item">
+                  <div>
+                    <strong>{e.course_code}</strong> — {e.course_name}
+                    <div className="ad-position">
+                      {e.professor} · {e.venue} · {e.course_type}
+                    </div>
+                  </div>
+                  <button
+                    className="ad-btn ad-btn-drop"
+                    disabled={busyId === e.offering_id}
+                    onClick={() => handleDrop(e.offering_id)}
+                  >
+                    Drop
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
-
-export default WaitlistPage;

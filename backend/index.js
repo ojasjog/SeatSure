@@ -1590,40 +1590,53 @@ app.post("/api/admin/enrollments/complete", authenticateToken, requireAdmin, asy
 });
 
 // ------------------------------------------------------------
-// Add & Drop — course-level waitlist queue
+// Add & Drop — two-phase, course-level waitlist
 //
-// Students join (or leave) a queue for a COURSE they didn't get a
-// seat in — any professor's section is acceptable, so the queue is
-// keyed by course_id, not one offering. Joining is only allowed
-// inside a short scheduled window (ADDDROP_START_TIME, for
-// ADDDROP_WINDOW_MINUTES minutes) — same idea as the FFCS turn
-// clock above, just one shared window instead of per-student turns.
+// Phase 1 — Join window (ADDDROP_START_TIME / ADDDROP_WINDOW_MINUTES):
+// students join a queue for a COURSE (any professor's section is fine)
+// they didn't get in FFCS. No allotment happens during this phase.
 //
-// Dropping a currently-confirmed course needs no window and no
-// queue — it's instant, and it's the event that frees a seat and
-// triggers promoteAddDropQueue() below.
+// Dropping a confirmed course needs no window and no queue — it's
+// instant, any time, and just frees the seat.
+//
+// Phase 2 — Live Allotment window (ALLOT_START_TIME / ALLOT_WINDOW_MINUTES):
+// the moment this window opens, every course with a queue is swept for
+// already-open seats and allots them immediately. From then on, every
+// drop that happens is processed live the same way. Outside this
+// window, a drop still frees the seat but nobody gets allotted until
+// the next time this window is open.
 // ------------------------------------------------------------
 const ADDDROP_START_TIME = process.env.ADDDROP_START_TIME
   ? new Date(process.env.ADDDROP_START_TIME)
   : null;
 const ADDDROP_WINDOW_MINUTES = Number(process.env.ADDDROP_WINDOW_MINUTES || 30);
 
-function getAddDropWindow() {
-  if (!ADDDROP_START_TIME) {
-    return { configured: false, open: false, opens_at: null, closes_at: null };
-  }
-  const closesAt = new Date(ADDDROP_START_TIME.getTime() + ADDDROP_WINDOW_MINUTES * 60 * 1000);
+const ALLOT_START_TIME = process.env.ALLOT_START_TIME
+  ? new Date(process.env.ALLOT_START_TIME)
+  : null;
+const ALLOT_WINDOW_MINUTES = Number(process.env.ALLOT_WINDOW_MINUTES || 1440);
+
+function computeWindow(start, minutes) {
+  if (!start) return { configured: false, open: false, opens_at: null, closes_at: null };
+  const closesAt = new Date(start.getTime() + minutes * 60 * 1000);
   const now = new Date();
   return {
     configured: true,
-    open: now >= ADDDROP_START_TIME && now < closesAt,
-    opens_at: ADDDROP_START_TIME.toISOString(),
+    open: now >= start && now < closesAt,
+    opens_at: start.toISOString(),
     closes_at: closesAt.toISOString(),
   };
 }
 
-// Re-numbers a course's queue to a clean 1..N sequence after any
-// join/leave/promotion, so positions never show gaps.
+function getJoinWindow() {
+  return computeWindow(ADDDROP_START_TIME, ADDDROP_WINDOW_MINUTES);
+}
+
+function getAllotWindow() {
+  return computeWindow(ALLOT_START_TIME, ALLOT_WINDOW_MINUTES);
+}
+
+// Re-numbers a course's queue to a clean 1..N sequence.
 async function renumberAddDropQueue(connection, courseId) {
   const [rows] = await connection.query(
     `SELECT waitlist_id FROM Waitlist WHERE course_id = ? ORDER BY queue_position ASC`,
@@ -1637,62 +1650,113 @@ async function renumberAddDropQueue(connection, courseId) {
   }
 }
 
-// Called right after a seat on `offeringId` (course `courseId`) has
-// just been freed, inside the same transaction that freed it. Walks
-// the course's queue in position order; for each student, checks
-// the freed offering's slots against their REAL confirmed FFCS
-// timetable (not any draft/preference data). The first student who
-// doesn't clash gets the seat; anyone who clashes is skipped and
-// stays queued.
-async function promoteAddDropQueue(connection, offeringId, courseId) {
-  const [[offering]] = await connection.query(
-    `SELECT seats_remaining FROM CourseOffering WHERE offering_id = ?`,
-    [offeringId]
+// Sweeps EVERY open seat across every offering of `courseId` against
+// the course's queue, in position order, checking each candidate's
+// REAL confirmed FFCS timetable for a clash. Only runs anything when
+// the Live Allotment window is open — otherwise it's a no-op and seats
+// stay "banked" until that window is open. Returns the list of
+// { student_id, offering_id } promotions actually made.
+async function runCourseAllotment(connection, courseId) {
+  if (!getAllotWindow().open) return [];
+
+  const [offerings] = await connection.query(
+    `SELECT offering_id, seats_remaining FROM CourseOffering WHERE course_id = ? AND seats_remaining > 0 FOR UPDATE`,
+    [courseId]
   );
-  if (!offering || offering.seats_remaining <= 0) return null;
+  if (offerings.length === 0) return [];
 
   const [queue] = await connection.query(
     `SELECT waitlist_id, student_id FROM Waitlist WHERE course_id = ? ORDER BY queue_position ASC`,
     [courseId]
   );
+  if (queue.length === 0) return [];
 
-  for (const entry of queue) {
-    const [clashes] = await connection.query(
-      `SELECT 1
-       FROM Enrollment e
-       JOIN OfferingSlot os1 ON e.offering_id = os1.offering_id
-       JOIN OfferingSlot os2 ON os1.slot_id = os2.slot_id
-       WHERE e.student_id = ? AND e.status = 'confirmed' AND os2.offering_id = ?
-       LIMIT 1`,
-      [entry.student_id, offeringId]
-    );
-    if (clashes.length > 0) continue; // clashes with their real timetable -> leave queued, try next
+  const promotions = [];
+  const promotedStudentIds = new Set();
 
-    await connection.query(
-      `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
-      [offeringId]
-    );
-    await connection.query(
-      `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
-      [entry.student_id, offeringId]
-    );
-    await connection.query(`DELETE FROM Waitlist WHERE waitlist_id = ?`, [entry.waitlist_id]);
-    await renumberAddDropQueue(connection, courseId);
-    return entry.student_id; // only one seat was freed -> promote exactly one student
+  for (const offering of offerings) {
+    let seatsLeft = offering.seats_remaining;
+    for (const entry of queue) {
+      if (seatsLeft <= 0) break;
+      if (promotedStudentIds.has(entry.student_id)) continue;
+
+      const [clashes] = await connection.query(
+        `SELECT 1
+         FROM Enrollment e
+         JOIN OfferingSlot os1 ON e.offering_id = os1.offering_id
+         JOIN OfferingSlot os2 ON os1.slot_id = os2.slot_id
+         WHERE e.student_id = ? AND e.status = 'confirmed' AND os2.offering_id = ?
+         LIMIT 1`,
+        [entry.student_id, offering.offering_id]
+      );
+      if (clashes.length > 0) continue; // clashes with their real timetable -> try the next person
+
+      await connection.query(
+        `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
+        [offering.offering_id]
+      );
+      await connection.query(
+        `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
+        [entry.student_id, offering.offering_id]
+      );
+      await connection.query(`DELETE FROM Waitlist WHERE waitlist_id = ?`, [entry.waitlist_id]);
+
+      promotedStudentIds.add(entry.student_id);
+      promotions.push({ student_id: entry.student_id, offering_id: offering.offering_id });
+      seatsLeft -= 1;
+    }
   }
 
-  return null; // nobody queued fits this slot -> seat stays open
+  if (promotions.length > 0) {
+    await renumberAddDropQueue(connection, courseId);
+  }
+  return promotions;
+}
+
+// Sweeps every course that currently has a non-empty queue. Used both
+// right when the Live Allotment window opens and on every status
+// check during it, so a seat that was already open (or freed outside
+// the window) gets handed out the moment the window is live.
+async function sweepAllAddDropQueues() {
+  if (!getAllotWindow().open) return;
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [courseRows] = await connection.query(
+      `SELECT DISTINCT course_id FROM Waitlist`
+    );
+
+    const allPromotions = [];
+    for (const { course_id } of courseRows) {
+      const promotions = await runCourseAllotment(connection, course_id);
+      allPromotions.push(...promotions);
+    }
+
+    await connection.commit();
+    connection.release();
+
+    const affectedOfferings = new Set(allPromotions.map((p) => p.offering_id));
+    affectedOfferings.forEach((id) => emitSeatUpdate(id));
+    allPromotions.forEach((p) =>
+      io.emit("addrop:promoted", { student_id: p.student_id, offering_id: p.offering_id })
+    );
+  } catch (err) {
+    await connection.rollback();
+    connection.release();
+    console.error("sweepAllAddDropQueues failed:", err);
+  }
 }
 
 // ------------------------------------------------------------
 // GET /api/addrop/me
-// Missing courses (+ your queue position in each, if queued) for
-// the Add card, and your currently-confirmed courses for the Drop
-// card, plus whether the Pre-Add&Drop window is open right now.
 // ------------------------------------------------------------
 app.get("/api/addrop/me", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
   try {
+    await sweepAllAddDropQueues();
+
     const [missing] = await pool.query(
       `SELECT c.course_id, c.course_code, c.course_name,
               w.waitlist_id, w.queue_position
@@ -1720,7 +1784,8 @@ app.get("/api/addrop/me", authenticateToken, requireStudent, async (req, res) =>
     );
 
     res.json({
-      window: getAddDropWindow(),
+      join_window: getJoinWindow(),
+      allot_window: getAllotWindow(),
       missing: missing.map((m) => ({
         course_id: m.course_id,
         course_code: m.course_code,
@@ -1738,16 +1803,15 @@ app.get("/api/addrop/me", authenticateToken, requireStudent, async (req, res) =>
 
 // ------------------------------------------------------------
 // POST /api/addrop/queue/:courseId  — join the Add queue
-// Only inside the Pre-Add&Drop window, and only for a course you
-// aren't already confirmed-enrolled in.
+// Only inside the Join window.
 // ------------------------------------------------------------
 app.post("/api/addrop/queue/:courseId", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
   const courseId = Number(req.params.courseId);
 
-  const win = getAddDropWindow();
+  const win = getJoinWindow();
   if (!win.open) {
-    return res.status(403).json({ error: "The Pre-Add&Drop window is not open right now.", window: win });
+    return res.status(403).json({ error: "The Be-in-queue window is not open right now.", window: win });
   }
 
   try {
@@ -1806,8 +1870,10 @@ app.delete("/api/addrop/queue/:courseId", authenticateToken, requireStudent, asy
 
 // ------------------------------------------------------------
 // POST /api/addrop/drop/:offeringId  — drop a confirmed course
-// No window, no queue needed — this is the event that frees a seat
-// and immediately triggers promoteAddDropQueue() for that course.
+// Works any time, no window, no queue. Always frees the seat; only
+// actually hands it to the next queued student if the Live Allotment
+// window happens to be open right now (runCourseAllotment no-ops
+// otherwise, and the seat just sits open/"banked").
 // ------------------------------------------------------------
 app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
@@ -1842,16 +1908,21 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
       [offeringId]
     );
 
-    const promotedStudentId = await promoteAddDropQueue(connection, offeringId, offering.course_id);
+    const promotions = await runCourseAllotment(connection, offering.course_id);
 
     await connection.commit();
     connection.release();
 
     emitSeatUpdate(offeringId);
+    const affectedOfferings = new Set(promotions.map((p) => p.offering_id));
+    affectedOfferings.forEach((id) => emitSeatUpdate(id));
+    promotions.forEach((p) =>
+      io.emit("addrop:promoted", { student_id: p.student_id, offering_id: p.offering_id })
+    );
 
     res.json({
       status: "dropped",
-      promoted_student_id: promotedStudentId,
+      promoted: promotions,
     });
   } catch (err) {
     await connection.rollback();
@@ -1861,59 +1932,7 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
   }
 });
 
+
 server.listen(PORT, () => {
   console.log(`SeatSure backend running on http://localhost:${PORT}`);
-  console.log(
-    `FFCS clock: turn 1 opens now, +${TURN_GAP_SECONDS}s per registration_order after that.`
-  );
-});
-
-app.post("/api/student/reset-ffcs", authenticateToken, requireStudent, async (req, res) => {
-  const studentId = req.user.student_id;
-  const connection = await pool.getConnection();
-
-  try {
-    await connection.beginTransaction();
-
-    // Restore seats for anything this student had locked in
-    const [enrollments] = await connection.query(
-      `SELECT offering_id FROM Enrollment WHERE student_id = ? AND status = 'confirmed'`,
-      [studentId]
-    );
-    for (const { offering_id } of enrollments) {
-      await connection.query(
-        `UPDATE CourseOffering SET seats_remaining = seats_remaining + 1 WHERE offering_id = ?`,
-        [offering_id]
-      );
-    }
-
-    // Also release any waitlist slots this student was holding (no seat count impact,
-    // but clear the rows so a fresh run doesn't see stale queue positions)
-    await connection.query(`DELETE FROM Waitlist WHERE student_id = ?`, [studentId]);
-
-    // Clear FFCS picks
-    await connection.query(`DELETE FROM Enrollment WHERE student_id = ?`, [studentId]);
-
-    // Clear pre-FFCS priorities (both draft and submitted)
-    await connection.query(`DELETE FROM StudentPreference WHERE student_id = ?`, [studentId]);
-
-    // Reset turn-based progress so FFCS can be replayed from the top
-    await connection.query(
-      `UPDATE RegistrationProgress SET current_course_index = 0, status = 'not_started' WHERE student_id = ?`,
-      [studentId]
-    );
-
-    await connection.commit();
-    connection.release();
-
-    // Let any open seat-counter listeners know these offerings changed
-    enrollments.forEach(({ offering_id }) => emitSeatUpdate(offering_id));
-
-    res.json({ success: true, message: "Priorities and FFCS picks cleared. You can start over." });
-  } catch (err) {
-    await connection.rollback();
-    connection.release();
-    console.error(err);
-    res.status(500).json({ error: "Failed to reset your FFCS state" });
-  }
 });
