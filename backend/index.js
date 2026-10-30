@@ -1655,23 +1655,88 @@ async function renumberAddDropQueue(connection, courseId) {
 // confirmed FFCS timetable for a clash. Only runs when the Live
 // Allotment window is open — otherwise it's a no-op and seats stay
 // "banked" until that window is open. If priorityOfferingId is given
-// (the offering a drop just freed), that offering is tried first, so
-// a drop visibly hands its own seat to the next queued student instead
-// of whichever offering happens to come back first from the DB.
+// (the offering a drop just freed), that offering's unit is tried
+// first, so a drop visibly hands its own seat to the next queued
+// student instead of whichever offering happens to come back first
+// from the DB.
+//
+// If the course has lab sections at all, theory and lab taught by the
+// SAME professor are one "unit" — a queued student is only promoted
+// when some self-clash-free theory+lab combo from one professor has a
+// free seat on both sides and neither clashes with their real
+// timetable, and they're enrolled into both together. A professor can
+// teach more than one theory section and more than one lab section,
+// so every theory×lab combo for that professor is considered (same as
+// the original live-FFCS pairing), not just a single pair. This keeps
+// Add/Drop from ever handing out just one half of a course.
 // Returns the list of { student_id, offering_id } promotions made.
 async function runCourseAllotment(connection, courseId, priorityOfferingId = null) {
   if (!getAllotWindow().open) return [];
 
   const [offerings] = await connection.query(
-    `SELECT offering_id, seats_remaining FROM CourseOffering WHERE course_id = ? AND seats_remaining > 0 FOR UPDATE`,
+    `SELECT offering_id, professor_id, course_type, seats_remaining
+     FROM CourseOffering WHERE course_id = ? AND seats_remaining > 0 FOR UPDATE`,
     [courseId]
   );
   if (offerings.length === 0) return [];
 
+  const [typeRows] = await connection.query(
+    `SELECT DISTINCT course_type FROM CourseOffering WHERE course_id = ?`,
+    [courseId]
+  );
+  const types = new Set(typeRows.map((r) => r.course_type));
+  const hasBoth = types.has("theory") && types.has("lab");
+
+  const offeringIdsWithSeats = offerings.map((o) => o.offering_id);
+  const [slotRows] = await connection.query(
+    `SELECT offering_id, slot_id FROM OfferingSlot WHERE offering_id IN (${offeringIdsWithSeats
+      .map(() => "?")
+      .join(",")})`,
+    offeringIdsWithSeats
+  );
+  const slotsByOffering = new Map();
+  for (const row of slotRows) {
+    if (!slotsByOffering.has(row.offering_id)) slotsByOffering.set(row.offering_id, new Set());
+    slotsByOffering.get(row.offering_id).add(row.slot_id);
+  }
+
+  // Build allotment units: every self-clash-free {theory, lab} combo
+  // per professor when the course has both, otherwise one unit per
+  // individual offering.
+  const units = [];
+  if (hasBoth) {
+    const theoryByProf = new Map();
+    const labByProf = new Map();
+    for (const o of offerings) {
+      const bucket = o.course_type === "lab" ? labByProf : theoryByProf;
+      if (!bucket.has(o.professor_id)) bucket.set(o.professor_id, []);
+      bucket.get(o.professor_id).push(o);
+    }
+    for (const [profId, theorySections] of theoryByProf) {
+      const labSections = labByProf.get(profId) || [];
+      for (const t of theorySections) {
+        for (const l of labSections) {
+          const tSlots = slotsByOffering.get(t.offering_id) || new Set();
+          const lSlots = slotsByOffering.get(l.offering_id) || new Set();
+          const selfClash = [...tSlots].some((id) => lSlots.has(id));
+          if (selfClash) continue;
+          units.push({ offeringIds: [t.offering_id, l.offering_id] });
+        }
+      }
+    }
+  } else {
+    for (const o of offerings) {
+      units.push({ offeringIds: [o.offering_id] });
+    }
+  }
+  if (units.length === 0) return [];
+
   if (priorityOfferingId) {
-    offerings.sort((a, b) => {
-      if (a.offering_id === priorityOfferingId) return -1;
-      if (b.offering_id === priorityOfferingId) return 1;
+    units.sort((a, b) => {
+      const aHas = a.offeringIds.includes(priorityOfferingId);
+      const bHas = b.offeringIds.includes(priorityOfferingId);
+      if (aHas && !bHas) return -1;
+      if (bHas && !aHas) return 1;
       return 0;
     });
   }
@@ -1682,45 +1747,49 @@ async function runCourseAllotment(connection, courseId, priorityOfferingId = nul
   );
   if (queue.length === 0) return [];
 
+  const seatsRemaining = new Map(offerings.map((o) => [o.offering_id, o.seats_remaining]));
   const promotions = [];
   const promotedStudentIds = new Set();
 
-  for (const offering of offerings) {
-    let seatsLeft = offering.seats_remaining;
+  for (const unit of units) {
     for (const entry of queue) {
-      if (seatsLeft <= 0) break;
       if (promotedStudentIds.has(entry.student_id)) continue;
 
+      const seatsOk = unit.offeringIds.every((id) => (seatsRemaining.get(id) ?? 0) > 0);
+      if (!seatsOk) break; // this unit is out of seats on one side or the other -> next unit
+
+      const placeholders = unit.offeringIds.map(() => "?").join(",");
       const [clashes] = await connection.query(
         `SELECT 1
          FROM Enrollment e
          JOIN OfferingSlot os1 ON e.offering_id = os1.offering_id
          JOIN OfferingSlot os2 ON os1.slot_id = os2.slot_id
-         WHERE e.student_id = ? AND e.status = 'confirmed' AND os2.offering_id = ?
+         WHERE e.student_id = ? AND e.status = 'confirmed' AND os2.offering_id IN (${placeholders})
          LIMIT 1`,
-        [entry.student_id, offering.offering_id]
+        [entry.student_id, ...unit.offeringIds]
       );
       if (clashes.length > 0) continue; // clashes with their real timetable -> try the next person
 
-      await connection.query(
-        `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
-        [offering.offering_id]
-      );
-      // Upsert: a student who previously dropped THIS exact offering
-      // already has a 'cancelled' row for (student_id, offering_id),
-      // which is unique — a plain INSERT would collide with it.
-      await connection.query(
-        `INSERT INTO Enrollment (student_id, offering_id, status)
-         VALUES (?, ?, 'confirmed')
-         ON CONFLICT (student_id, offering_id)
-         DO UPDATE SET status = 'confirmed', completed_at = NULL`,
-        [entry.student_id, offering.offering_id]
-      );
+      for (const offeringId of unit.offeringIds) {
+        await connection.query(
+          `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
+          [offeringId]
+        );
+        // Upsert: a student who previously dropped THIS exact offering
+        // already has a 'cancelled' row for (student_id, offering_id),
+        // which is unique — a plain INSERT would collide with it.
+        await connection.query(
+          `INSERT INTO Enrollment (student_id, offering_id, status)
+           VALUES (?, ?, 'confirmed')
+           ON CONFLICT (student_id, offering_id)
+           DO UPDATE SET status = 'confirmed', completed_at = NULL`,
+          [entry.student_id, offeringId]
+        );
+        seatsRemaining.set(offeringId, (seatsRemaining.get(offeringId) ?? 1) - 1);
+        promotions.push({ student_id: entry.student_id, offering_id: offeringId });
+      }
       await connection.query(`DELETE FROM Waitlist WHERE waitlist_id = ?`, [entry.waitlist_id]);
-
       promotedStudentIds.add(entry.student_id);
-      promotions.push({ student_id: entry.student_id, offering_id: offering.offering_id });
-      seatsLeft -= 1;
     }
   }
 
@@ -1788,17 +1857,39 @@ app.get("/api/addrop/me", authenticateToken, requireStudent, async (req, res) =>
       [studentId, studentId]
     );
 
-    const [enrolled] = await pool.query(
+    const [enrolledRows] = await pool.query(
       `SELECT e.offering_id, c.course_id, c.course_code, c.course_name,
-              p.name AS professor, co.venue, co.course_type
+              p.professor_id, p.name AS professor, co.venue, co.course_type
        FROM Enrollment e
        JOIN CourseOffering co ON e.offering_id = co.offering_id
        JOIN Course c ON co.course_id = c.course_id
        JOIN Professor p ON co.professor_id = p.professor_id
        WHERE e.student_id = ? AND e.status = 'confirmed'
-       ORDER BY c.course_code`,
+       ORDER BY c.course_code, co.course_type`,
       [studentId]
     );
+
+    // Group theory + lab from the same professor into one row — they
+    // drop together, so the student should see (and drop) them as one.
+    const enrolledByKey = new Map();
+    for (const row of enrolledRows) {
+      const key = `${row.course_id}:${row.professor_id}`;
+      if (!enrolledByKey.has(key)) {
+        enrolledByKey.set(key, {
+          offering_id: row.offering_id, // used to call the drop endpoint
+          course_id: row.course_id,
+          course_code: row.course_code,
+          course_name: row.course_name,
+          professor: row.professor,
+          sections: [],
+        });
+      }
+      enrolledByKey.get(key).sections.push({
+        offering_id: row.offering_id,
+        course_type: row.course_type,
+        venue: row.venue,
+      });
+    }
 
     res.json({
       join_window: getJoinWindow(),
@@ -1810,7 +1901,7 @@ app.get("/api/addrop/me", authenticateToken, requireStudent, async (req, res) =>
         queued: m.waitlist_id != null,
         queue_position: m.queue_position,
       })),
-      enrolled,
+      enrolled: Array.from(enrolledByKey.values()),
     });
   } catch (err) {
     console.error(err);
@@ -1887,11 +1978,15 @@ app.delete("/api/addrop/queue/:courseId", authenticateToken, requireStudent, asy
 
 // ------------------------------------------------------------
 // POST /api/addrop/drop/:offeringId  — drop a confirmed course
-// Works any time, no window, no queue. Always frees the seat; only
-// actually hands it to the next queued student if the Live Allotment
+// Works any time, no window, no queue. Always frees the seat(s); only
+// actually hands them to the next queued student if the Live Allotment
 // window happens to be open right now (runCourseAllotment no-ops
-// otherwise, and the seat just sits open/"banked"). Tries the offering
-// just freed first, before any other already-open offering.
+// otherwise, and the seats just sit open/"banked"). Tries the unit
+// just freed first, before any other already-open unit.
+//
+// Theory and lab taught by the SAME professor for the SAME course are
+// one registration from the student's side, so dropping either one
+// drops both together — never just the half that was clicked.
 // ------------------------------------------------------------
 app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
@@ -1901,37 +1996,49 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
   try {
     await connection.beginTransaction();
 
-    const [[enrollment]] = await connection.query(
-      `SELECT enrollment_id FROM Enrollment
-       WHERE student_id = ? AND offering_id = ? AND status = 'confirmed' FOR UPDATE`,
-      [studentId, offeringId]
+    const [[offering]] = await connection.query(
+      `SELECT course_id, professor_id FROM CourseOffering WHERE offering_id = ? FOR UPDATE`,
+      [offeringId]
     );
-    if (!enrollment) {
+    if (!offering) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ error: "That course offering doesn't exist." });
+    }
+
+    const [toDrop] = await connection.query(
+      `SELECT e.enrollment_id, e.offering_id
+       FROM Enrollment e
+       JOIN CourseOffering co ON e.offering_id = co.offering_id
+       WHERE e.student_id = ? AND e.status = 'confirmed'
+         AND co.course_id = ? AND co.professor_id = ?
+       FOR UPDATE`,
+      [studentId, offering.course_id, offering.professor_id]
+    );
+    if (toDrop.length === 0) {
       await connection.rollback();
       connection.release();
       return res.status(404).json({ error: "You aren't confirmed in this course offering." });
     }
 
-    const [[offering]] = await connection.query(
-      `SELECT course_id FROM CourseOffering WHERE offering_id = ? FOR UPDATE`,
-      [offeringId]
-    );
-
-    await connection.query(
-      `UPDATE Enrollment SET status = 'cancelled' WHERE enrollment_id = ?`,
-      [enrollment.enrollment_id]
-    );
-    await connection.query(
-      `UPDATE CourseOffering SET seats_remaining = seats_remaining + 1 WHERE offering_id = ?`,
-      [offeringId]
-    );
+    for (const row of toDrop) {
+      await connection.query(
+        `UPDATE Enrollment SET status = 'cancelled' WHERE enrollment_id = ?`,
+        [row.enrollment_id]
+      );
+      await connection.query(
+        `UPDATE CourseOffering SET seats_remaining = seats_remaining + 1 WHERE offering_id = ?`,
+        [row.offering_id]
+      );
+    }
 
     const promotions = await runCourseAllotment(connection, offering.course_id, offeringId);
 
     await connection.commit();
     connection.release();
 
-    emitSeatUpdate(offeringId);
+    const droppedOfferingIds = toDrop.map((r) => r.offering_id);
+    droppedOfferingIds.forEach((id) => emitSeatUpdate(id));
     const affectedOfferings = new Set(promotions.map((p) => p.offering_id));
     affectedOfferings.forEach((id) => emitSeatUpdate(id));
     promotions.forEach((p) =>
@@ -1940,6 +2047,7 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
 
     res.json({
       status: "dropped",
+      dropped: droppedOfferingIds,
       promoted: promotions,
     });
   } catch (err) {

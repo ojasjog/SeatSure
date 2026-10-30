@@ -229,12 +229,17 @@ export default function Waitlist({ onBack }) {
             ) : (
               <ul className="ad-list">
                 {data?.enrolled?.map((e) => (
-                  <li key={e.offering_id} className="ad-list-item">
+                  <li key={`${e.course_id}-${e.offering_id}`} className="ad-list-item">
                     <div className="ad-item-text">
                       <span className="ad-code">{e.course_code}</span>
                       <span className="ad-name">{e.course_name}</span>
                       <span className="ad-position">
-                        {e.professor}, {e.venue}
+                        {e.professor}
+                        {e.sections?.length > 1
+                          ? ` — theory ${
+                              e.sections.find((s) => s.course_type !== "lab")?.venue ?? ""
+                            } + lab ${e.sections.find((s) => s.course_type === "lab")?.venue ?? ""}`
+                          : `, ${e.sections?.[0]?.venue ?? ""}`}
                       </span>
                     </div>
                     <button
