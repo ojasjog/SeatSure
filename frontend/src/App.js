@@ -12,18 +12,37 @@ import {
 } from "./api";
 import Login from "./components/Login";
 import Landing from "./components/Landing";
-import TimetableGrid from "./components/TimetableGrid";
+import TimetableGrid, { COURSE_COLOR_COUNT } from "./components/TimetableGrid";
 import FFCSPage from "./components/FFCSPage";
 import WaitlistPage from "./components/Waitlist";
 import ReviewsPage from "./components/ReviewsPage";
+import ThemeToggle from "./components/ThemeToggle";
 import html2canvas from "html2canvas";
-import "./App.css";const COURSE_COLORS = [
-  "#D7C6A7", "#BCCAB8", "#D8BDB8", "#CAC9C1",
-  "#DCC6A5", "#C9C8B1", "#D4C8B5",
-];
+import "./App.css";
 
-function courseColor(index) {
-  return COURSE_COLORS[index % COURSE_COLORS.length];
+// Course colours live in theme.css as .cc-0 … .cc-6 so they follow
+// the day/night theme. This returns the class for a course index.
+function courseColorClass(index) {
+  return `cc-${index % COURSE_COLOR_COUNT}`;
+}
+
+// "A1+TA1 → L31+L32" -> ["A1", "TA1", "L31", "L32"]
+function parseSlotCodes(display) {
+  if (!display) return [];
+  return String(display)
+    .split(/\+|→|\/|,/)
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function optionSlotCodes(option) {
+  if (!option) return [];
+  const fromParts = [
+    ...parseSlotCodes(option.theory_slots),
+    ...parseSlotCodes(option.lab_slots),
+  ];
+  const codes = fromParts.length ? fromParts : parseSlotCodes(option.slot_display);
+  return Array.from(new Set(codes));
 }
 
 
@@ -154,8 +173,31 @@ function CourseSection({
   handleDragStart,
   handleDragOver,
   handleDrop,
+  occupiedSlots = {},
+  setHoverPreview = () => {},
 }) {
   const courseId = Number(course.course_id);
+
+  const courseName = course.course_name || course.name;
+
+  // Which other course (if any) already holds one of this option's slots
+  // through its first-choice professor.
+  const clashFor = (option) => {
+    for (const code of optionSlotCodes(option)) {
+      const holder = occupiedSlots[code];
+      if (holder && holder.courseId !== courseId) return holder.courseName;
+    }
+    return null;
+  };
+
+  const previewOption = (option) =>
+    setHoverPreview({
+      courseId,
+      courseName,
+      slots: optionSlotCodes(option),
+    });
+
+  const clearPreview = () => setHoverPreview(null);
 
   const isOpen = !!openCourses[courseId];
 
@@ -266,8 +308,8 @@ function CourseSection({
                       )
                     }
                   >
-                    <div className="priority-number">
-                      P{index + 1}
+                    <div className="priority-number" title={`Choice ${index + 1}`}>
+                      {index + 1}
                     </div>
 
                     <div className="priority-content">
@@ -352,7 +394,10 @@ function CourseSection({
               .
             </div>
           ) : (
-            <div className="faculty-results">
+            <div
+              className="faculty-results"
+              onMouseLeave={clearPreview}
+            >
               {filteredOptions.map(
                 (option) => {
                   const alreadyAdded =
@@ -362,18 +407,26 @@ function CourseSection({
                         option.id
                     );
 
+                  const clashesWith = alreadyAdded
+                    ? null
+                    : clashFor(option);
+
                   return (
                     <button
                       type="button"
                       key={option.id}
-                      className="faculty-result"
+                      className={`faculty-result${clashesWith ? " would-clash" : ""}`}
                       disabled={alreadyAdded}
-                      onClick={() =>
+                      onMouseEnter={() => previewOption(option)}
+                      onFocus={() => previewOption(option)}
+                      onBlur={clearPreview}
+                      onClick={() => {
                         addPriority(
                           course,
                           option
-                        )
-                      }
+                        );
+                        clearPreview();
+                      }}
                     >
                       <div>
                         <strong>
@@ -381,11 +434,17 @@ function CourseSection({
                         </strong>
 
                         <small>
-                          {option.slot_display}
+                          {clashesWith ? (
+                            <span className="clash-note">
+                              Clashes with {clashesWith}
+                            </span>
+                          ) : (
+                            option.slot_display
+                          )}
                         </small>
                       </div>
 
-                      <span className="add-symbol">
+                      <span className="add-symbol" aria-hidden="true">
                         {alreadyAdded
                           ? "✓"
                           : "+"}
@@ -429,11 +488,33 @@ function TimetableResult({
   const selections =
     timetable?.selections || [];
 
+  const total = timetables.length;
+
+  // Arrow keys flip between options (ignored while typing in a field).
+  useEffect(() => {
+    const onKey = (event) => {
+      const tag = (event.target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (event.key === "ArrowRight") {
+        setSelectedIndex((prev) => Math.min(total - 1, prev + 1));
+      } else if (event.key === "ArrowLeft") {
+        setSelectedIndex((prev) => Math.max(0, prev - 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [total, setSelectedIndex]);
+
   const handleDownload = () => {
     const gridElement = document.getElementById("timetable-grid-capture");
     if (!gridElement) return;
 
-    html2canvas(gridElement, { backgroundColor: "#ffffff", scale: 2 }).then((canvas) => {
+    const background =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--bg")
+        .trim() || "#ffffff";
+
+    html2canvas(gridElement, { backgroundColor: background, scale: 2 }).then((canvas) => {
       const link = document.createElement("a");
       link.download = `seatsure-timetable-option-${selectedIndex + 1}.png`;
       link.href = canvas.toDataURL("image/png");
@@ -441,69 +522,72 @@ function TimetableResult({
     });
   };
 
+  const firstChoices = selections.filter((s) => s.priority_rank === 1).length;
+
+  const gridSelections = selections.map((selection, index) => ({
+    ...selection,
+    color_index: index,
+  }));
+
+  // Only show a handful of dots; beyond that the counter says enough.
+  const showDots = total > 1 && total <= 12;
+
   return (
-
     <div className="timetable-result">
-
       <div className="result-topbar">
         <div>
           <div className="result-label">
-            TIMETABLE
+            Clash-free timetable
           </div>
 
           <h2>
-            Option{" "}
-            {selectedIndex + 1}
-
-            <span className="result-total">
-              {" "}
-              /{" "}
-              {timetables.length}
-            </span>
+            Option {selectedIndex + 1}
+            <span className="result-total"> of {total}</span>
           </h2>
         </div>
 
         <div className="result-navigation">
+          {showDots && (
+            <div className="option-dots" role="tablist" aria-label="Timetable options">
+              {timetables.map((_, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  role="tab"
+                  aria-selected={i === selectedIndex}
+                  aria-label={`Option ${i + 1}`}
+                  className={`option-dot${i === selectedIndex ? " active" : ""}`}
+                  onClick={() => setSelectedIndex(i)}
+                />
+              ))}
+            </div>
+          )}
+
+          {total > 1 && (
+            <span className="kbd-hint">
+              <kbd>←</kbd> <kbd>→</kbd>
+            </span>
+          )}
+
           <button
             type="button"
             className="nav-button"
-            disabled={
-              selectedIndex === 0
-            }
-            onClick={() =>
-              setSelectedIndex(
-                (prev) =>
-                  Math.max(
-                    0,
-                    prev - 1
-                  )
-              )
-            }
+            disabled={selectedIndex === 0}
+            onClick={() => setSelectedIndex((prev) => Math.max(0, prev - 1))}
           >
-            ← Prev
+            Previous
           </button>
 
           <button
             type="button"
             className="nav-button"
-            disabled={
-              selectedIndex ===
-              timetables.length - 1
-            }
-            onClick={() =>
-              setSelectedIndex(
-                (prev) =>
-                  Math.min(
-                    timetables.length - 1,
-                    prev + 1
-                  )
-              )
-            }
+            disabled={selectedIndex === total - 1}
+            onClick={() => setSelectedIndex((prev) => Math.min(total - 1, prev + 1))}
           >
-            Next →
+            Next
           </button>
 
-            <button
+          <button
             type="button"
             className="nav-button"
             onClick={handleDownload}
@@ -513,88 +597,58 @@ function TimetableResult({
         </div>
       </div>
 
-      
-
-      
-
       <div className="result-stats">
         <div className="stat">
           <span className="stat-value">
-            {selections.filter((s) => s.priority_rank === 1).length}
-            /
-            {selections.length}
+            {firstChoices}/{selections.length}
           </span>
+          <span className="stat-label">First choices you got</span>
+        </div>
 
-          <span className="stat-label">
-            Got 1st choice
-          </span>
+        <div className="stat">
+          <span className="stat-value">{selections.length}</span>
+          <span className="stat-label">Courses placed</span>
         </div>
       </div>
 
       <div className="assigned-faculty">
         <div className="assigned-title">
-          ASSIGNED FACULTY
+          Your faculty in this option
         </div>
 
-        <div className="assigned-list">
-          {selections.map(
-            (selection, index) => (
-              <div
-                className="assigned-item"
-                key={`${selection.course_id}-${selection.professor_id}-${index}`}
-              >
-                <div className="assigned-course">
-                  {selection.course_name}
-                </div>
-
-                <div className="assigned-professor">
-                  {selection.professor_name}
-                </div>
-
-                {selection.slot_codes && selection.slot_codes.length > 0 && (
-                  <div className="assigned-slots">
-                    {selection.slot_codes.join(" + ")}
-                  </div>
-                )}
+        <div className="assigned-list" key={selectedIndex}>
+          {selections.map((selection, index) => (
+            <div
+              className={`assigned-item ${courseColorClass(index)}`}
+              style={{ animationDelay: `${index * 45}ms` }}
+              key={`${selection.course_id}-${selection.professor_id}-${index}`}
+            >
+              <div className="assigned-course">
+                {selection.course_name}
               </div>
-            )
-          )}
+
+              <div className="assigned-professor">
+                {selection.professor_name}
+                {selection.priority_rank
+                  ? ` (choice ${selection.priority_rank})`
+                  : ""}
+              </div>
+
+              {selection.slot_codes && selection.slot_codes.length > 0 && (
+                <div className="assigned-slots">
+                  {selection.slot_codes.join(" + ")}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
-      <div className="assigned-faculty" style={{ marginTop: "12px" }}>
-  <div className="assigned-title">
-    COLOR KEY
-  </div>
-  <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", padding: "10px 13px" }}>
-    {selections.map((selection, index) => (
-      <div
-        key={selection.course_id}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-          fontSize: "9px",
-          color: "var(--text-soft)",
-        }}
-      >
-        <span
-          style={{
-            width: "9px",
-            height: "9px",
-            borderRadius: "2px",
-            background: courseColor(index),
-            display: "inline-block",
-          }}
-        />
-        {selection.course_name}
-      </div>
-    ))}
-  </div>
-</div>
-
-      <TimetableGrid selections={selections} />
-
+      <TimetableGrid
+        selections={gridSelections}
+        animateKey={`option-${selectedIndex}`}
+        sweep
+      />
     </div>
   );
 }
@@ -626,6 +680,10 @@ function Dashboard({ student, onLogout, onBack }) {
     useState("");
 
   const [clashInfo, setClashInfo] = useState([]);
+
+  // Professor option currently hovered in the sidebar, shown as a
+  // ghost on the live draft grid: { courseId, courseName, slots }
+  const [hoverPreview, setHoverPreview] = useState(null);
   
   // =========================================================
   // LOAD COURSES
@@ -1512,6 +1570,107 @@ function Dashboard({ student, onLogout, onBack }) {
     };
 
   // =========================================================
+  // LIVE DRAFT
+  // Each course's first-choice professor, laid onto the week as
+  // you build. Restored (saved) choices get their slots resolved
+  // from the faculty list once it has loaded.
+  // =========================================================
+
+  // Saved priorities come back without slot info, so load faculty
+  // for those courses in the background to fill the draft grid.
+  useEffect(() => {
+    if (courses.length === 0) return;
+    Object.entries(coursePriorities).forEach(([courseId, list]) => {
+      if (!list || list.length === 0) return;
+      if (professors[Number(courseId)]) return;
+      const course = courses.find((c) => Number(c.course_id) === Number(courseId));
+      if (course) loadProfessors(course);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courses, coursePriorities]);
+
+  const courseIndexById = useMemo(() => {
+    const map = {};
+    courses.forEach((course, index) => {
+      map[Number(course.course_id)] = index;
+    });
+    return map;
+  }, [courses]);
+
+  const draftSelections = useMemo(() => {
+    const list = [];
+    Object.entries(coursePriorities).forEach(([courseId, priorities]) => {
+      const first = priorities && priorities[0];
+      if (!first) return;
+
+      let slots = [
+        ...parseSlotCodes(first.theory_slots),
+        ...parseSlotCodes(first.lab_slots),
+      ];
+      if (slots.length === 0) slots = parseSlotCodes(first.slot_display);
+
+      if (slots.length === 0) {
+        const options = professors[Number(courseId)] || [];
+        const match = options.find(
+          (o) =>
+            Number(o.professor_id) === Number(first.professor_id) &&
+            (o.theory_offering_id || null) === (first.theory_offering_id || null) &&
+            (o.lab_offering_id || null) === (first.lab_offering_id || null)
+        );
+        slots = optionSlotCodes(match);
+      }
+
+      const course = courses.find((c) => Number(c.course_id) === Number(courseId));
+      list.push({
+        course_id: Number(courseId),
+        course_name: course?.course_name || course?.name || `Course ${courseId}`,
+        professor_name: first.professor_name,
+        slot_codes: Array.from(new Set(slots)),
+        color_index: courseIndexById[Number(courseId)] ?? list.length,
+      });
+    });
+    return list;
+  }, [coursePriorities, professors, courses, courseIndexById]);
+
+  // slot code -> course holding it (via first choice), for clash hints
+  const occupiedSlots = useMemo(() => {
+    const map = {};
+    draftSelections.forEach((sel) => {
+      sel.slot_codes.forEach((code) => {
+        if (!map[code]) {
+          map[code] = { courseId: sel.course_id, courseName: sel.course_name };
+        }
+      });
+    });
+    return map;
+  }, [draftSelections]);
+
+  const draftClashes = useMemo(() => {
+    const seen = {};
+    const pairs = new Set();
+    draftSelections.forEach((sel) => {
+      sel.slot_codes.forEach((code) => {
+        if (seen[code] && seen[code] !== sel.course_name) {
+          pairs.add([seen[code], sel.course_name].sort().join(" and "));
+        } else {
+          seen[code] = sel.course_name;
+        }
+      });
+    });
+    return Array.from(pairs);
+  }, [draftSelections]);
+
+  const rankedCourses = draftSelections.length;
+  const totalCourses = courses.length;
+  const progressPct = totalCourses ? rankedCourses / totalCourses : 0;
+  const RING = 2 * Math.PI * 25;
+
+  const ghost =
+    hoverPreview && hoverPreview.slots.length > 0
+      ? { courseName: hoverPreview.courseName, slots: hoverPreview.slots }
+      : null;
+
+  // =========================================================
   // CURRENT RESULT
   // =========================================================
 
@@ -1550,12 +1709,38 @@ function Dashboard({ student, onLogout, onBack }) {
         </div>
 
         <div className="sidebar-section">
-          <div className="sidebar-heading">
-            SELECTIONS
-          </div>
+          <div className="progress-block">
+            <div
+              className={`progress-ring${
+                totalCourses > 0 && rankedCourses === totalCourses ? " complete" : ""
+              }`}
+              role="img"
+              aria-label={`${rankedCourses} of ${totalCourses} courses ranked`}
+            >
+              <svg viewBox="0 0 58 58">
+                <circle className="progress-ring-track" cx="29" cy="29" r="25" />
+                <circle
+                  className="progress-ring-value"
+                  cx="29"
+                  cy="29"
+                  r="25"
+                  strokeDasharray={RING}
+                  strokeDashoffset={RING * (1 - progressPct)}
+                />
+              </svg>
+              <span className="progress-ring-label">{rankedCourses}</span>
+            </div>
 
-          <div className="priority-count">
-            {totalPriorities} faculty selected
+            <div className="progress-text">
+              <strong>
+                {rankedCourses} of {totalCourses} courses ranked
+              </strong>
+              <span>
+                {totalPriorities === 0
+                  ? "Open a course to pick faculty"
+                  : `${totalPriorities} faculty choice${totalPriorities === 1 ? "" : "s"} in total`}
+              </span>
+            </div>
           </div>
 
           {totalPriorities > 0 && (
@@ -1575,7 +1760,7 @@ function Dashboard({ student, onLogout, onBack }) {
 
         <div className="sidebar-section courses-sidebar">
           <div className="sidebar-heading">
-            COURSES
+            Courses
           </div>
 
           {loadingCourses ? (
@@ -1634,6 +1819,8 @@ function Dashboard({ student, onLogout, onBack }) {
                     handleDrop={
                       handleDrop
                     }
+                    occupiedSlots={occupiedSlots}
+                    setHoverPreview={setHoverPreview}
                   />
                 )
               )}
@@ -1649,18 +1836,19 @@ function Dashboard({ student, onLogout, onBack }) {
         <header className="main-header">
           <div>
             <div className="eyebrow">
-              VIT VELLORE {student?.name ? `· ${student.name}` : ""}
+              {student?.name
+                ? `Pre-FFCS for ${student.name.split(" ")[0]}`
+                : "Pre-FFCS"}
             </div>
 
             <h1>
-              Build your timetable
+              Build your week
             </h1>
 
             <p>
-              Choose faculty preferences
-              for each subject and find
-              compatible timetable
-              combinations.
+              Rank faculty for each course. Hover a professor to see
+              where their classes land, then generate every clash-free
+              timetable your choices allow.
             </p>
           </div>
 
@@ -1734,17 +1922,14 @@ function Dashboard({ student, onLogout, onBack }) {
                 </>
               ) : (
                 <>
-                  Generate timetable
-                  <span className="button-arrow">
-                    →
-                  </span>
+                  Generate timetables
                 </>
               )}
             </button>
 
             <button
   type="button"
-  className="header-link"
+  className="header-link danger"
   onClick={async () => {
     const confirmed = window.confirm(
       "This will clear your saved priorities and any FFCS picks so you can redo the whole flow. Continue?"
@@ -1810,21 +1995,47 @@ function Dashboard({ student, onLogout, onBack }) {
               }
             />
           ) : (
-            <div className="empty-state">
-              <div className="empty-icon">
-                □
+            <div className="draft">
+              <div className="draft-head">
+                <div>
+                  <h2 className="draft-title">
+                    {rankedCourses === 0
+                      ? "Your week, before you build it"
+                      : draftClashes.length > 0
+                      ? "Your first choices clash"
+                      : "Your first choices fit together"}
+                  </h2>
+                  <p className="draft-hint">
+                    {rankedCourses === 0
+                      ? "Open a course on the left and hover a professor. Their slots light up here before you add them."
+                      : draftClashes.length > 0
+                      ? `${draftClashes.join(", ")} share a slot. Add backup faculty or swap the order, then generate.`
+                      : "This is your week with everyone's first choice. Generate to find every clash-free combination, including your backups."}
+                  </p>
+                </div>
+
+                <div className="draft-legend">
+                  {draftSelections.map((sel) => (
+                    <span
+                      key={sel.course_id}
+                      className={`legend-chip ${courseColorClass(sel.color_index)}`}
+                    >
+                      {sel.course_name}
+                    </span>
+                  ))}
+                  {ghost && (
+                    <span className="legend-chip ghost">
+                      Previewing {ghost.courseName}
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <h2>
-                Your timetable will appear here
-              </h2>
-
-              <p>
-                Select faculty in order
-                of preference for each
-                subject, then generate
-                your clash-free timetable.
-              </p>
+              <TimetableGrid
+                selections={draftSelections}
+                ghost={ghost}
+                compact
+              />
             </div>
           )}
         </section>
@@ -1874,42 +2085,41 @@ function App() {
     setView("landing");
   };
 
+  let page;
+
   if (checkingSession) {
-    return <div className="session-loading">Loading SeatSure...</div>;
-  }
-
-  if (!student) {
-    return <Login onAuthenticated={handleAuthenticated} />;
-  }
-
-  if (view === "preffcs") {
-    return (
+    page = <div className="session-loading">Loading SeatSure…</div>;
+  } else if (!student) {
+    page = <Login onAuthenticated={handleAuthenticated} />;
+  } else if (view === "preffcs") {
+    page = (
       <Dashboard
         student={student}
         onLogout={handleLogout}
         onBack={() => setView("landing")}
       />
     );
-  }
-
-  if (view === "ffcs") {
-    return <FFCSPage onBack={() => setView("landing")} />;
-  }
-
-  if (view === "reviews") {
-    return <ReviewsPage onBack={() => setView("landing")} />;
-  }
-
-  if (view === "waitlist") {
-    return <WaitlistPage onBack={() => setView("landing")} />;
+  } else if (view === "ffcs") {
+    page = <FFCSPage onBack={() => setView("landing")} />;
+  } else if (view === "reviews") {
+    page = <ReviewsPage onBack={() => setView("landing")} />;
+  } else if (view === "waitlist") {
+    page = <WaitlistPage onBack={() => setView("landing")} />;
+  } else {
+    page = (
+      <Landing
+        student={student}
+        onSelect={setView}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   return (
-    <Landing
-      student={student}
-      onSelect={setView}
-      onLogout={handleLogout}
-    />
+    <>
+      {page}
+      <ThemeToggle />
+    </>
   );
 }
 

@@ -69,23 +69,50 @@ function Login({ onAuthenticated }) {
 
   return (
     <div className="login-shell">
+      <section className="login-hero" aria-hidden="true">
+        <div className="login-hero-brand">
+          <div className="brand-mark">S</div>
+          <span>SeatSure</span>
+        </div>
+
+        <h2 className="login-hero-title">Your FFCS, rehearsed.</h2>
+        <p className="login-hero-text">
+          Rank faculty, see clashes before they happen, and practise the
+          live round with real seat counts.
+        </p>
+
+        <div className="login-week">
+          {Array.from({ length: 30 }).map((_, i) => {
+            const lit = [1, 4, 8, 9, 13, 16, 20, 22, 25, 28];
+            const idx = lit.indexOf(i);
+            return (
+              <span
+                key={i}
+                className={idx >= 0 ? `lw-tile lit cc-${idx % 7}` : "lw-tile"}
+                style={{ "--d": `${idx * 260}ms` }}
+              />
+            );
+          })}
+        </div>
+      </section>
+
       <div className="login-card">
         <div className="login-brand">
           <div className="login-brand-mark">S</div>
           <div>
             <div className="login-brand-name">SeatSure</div>
-            <div className="login-brand-subtitle">VIT Vellore · FFCS Planner</div>
+            <div className="login-brand-subtitle">VIT Vellore registration</div>
           </div>
         </div>
 
-        <h1>{mode === "login" ? "Student login" : "Create your account"}</h1>
+        <h1>{mode === "login" ? "Welcome back" : "Create your account"}</h1>
         <p className="login-subtitle">
           {mode === "login"
-            ? "Sign in to build and register your timetable."
+            ? "Log in to plan and register your timetable."
             : "Sign up with your registration number to get started."}
         </p>
 
-        <div className="login-toggle">
+        <div className="login-toggle" data-mode={mode}>
           <button
             type="button"
             className={mode === "login" ? "active" : ""}

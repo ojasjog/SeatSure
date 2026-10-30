@@ -1,0 +1,595 @@
+/* =========================================================
+   SEATSURE — "BOTTLE GLASS" THEME
+   Frosted glass panels floating over a timetable of light.
+   Day: sunlight through glass. Night: the same glass, lamp-lit.
+
+   Every component stylesheet reads these tokens, so switching
+   [data-theme] on <html> re-skins the whole app.
+   ========================================================= */
+
+:root,
+:root[data-theme="day"] {
+  color-scheme: light;
+
+  /* base */
+  --bg: #edefea;
+  --bg-deep: #e2e6df;
+
+  /* glass */
+  --glass: rgba(255, 255, 255, 0.56);
+  --glass-strong: rgba(255, 255, 255, 0.78);
+  --glass-soft: rgba(255, 255, 255, 0.34);
+  --glass-edge: rgba(255, 255, 255, 0.9);
+  --glass-blur: blur(24px) saturate(170%);
+
+  /* legacy names used across component css */
+  --surface: var(--glass-strong);
+  --surface-soft: var(--glass);
+
+  --line: rgba(20, 32, 26, 0.1);
+  --line-dark: rgba(20, 32, 26, 0.2);
+
+  --text: #14201a;
+  --text-soft: #46544b;
+  --text-muted: #77837a;
+
+  /* brand */
+  --accent: #1e5b45;
+  --accent-hover: #164a37;
+  --accent-ink: #f3f7ec;
+  --accent-soft: rgba(30, 91, 69, 0.1);
+  --spark: #c8e05a;
+  --black: var(--accent);
+
+  /* states */
+  --ok: #2d7a4c;
+  --ok-soft: rgba(45, 122, 76, 0.12);
+  --warn: #a36a00;
+  --warn-soft: rgba(242, 181, 68, 0.2);
+  --danger: #b3362b;
+  --danger-soft: rgba(179, 54, 43, 0.1);
+  --danger-line: rgba(179, 54, 43, 0.3);
+
+  /* depth */
+  --shadow-sm: 0 1px 2px rgba(20, 40, 28, 0.06),
+    0 4px 12px -6px rgba(20, 40, 28, 0.14);
+  --shadow: 0 2px 6px -2px rgba(20, 40, 28, 0.08),
+    0 18px 40px -18px rgba(20, 40, 28, 0.28);
+  --shadow-lg: 0 4px 12px -4px rgba(20, 40, 28, 0.1),
+    0 40px 80px -30px rgba(20, 40, 28, 0.35);
+
+  /* ambient light behind the glass */
+  --aura-a: rgba(200, 224, 90, 0.75);
+  --aura-b: rgba(245, 197, 66, 0.6);
+  --aura-c: rgba(143, 185, 150, 0.7);
+  --aura-d: rgba(242, 167, 181, 0.55);
+  --grid-line: rgba(20, 32, 26, 0.05);
+
+  /* course colours: tint, edge, ink */
+  --c0-bg: rgba(200, 224, 90, 0.42);
+  --c0-edge: rgba(150, 175, 40, 0.55);
+  --c0-ink: #3a4810;
+  --c1-bg: rgba(245, 197, 66, 0.4);
+  --c1-edge: rgba(200, 150, 20, 0.5);
+  --c1-ink: #5a4100;
+  --c2-bg: rgba(143, 185, 150, 0.45);
+  --c2-edge: rgba(90, 140, 100, 0.55);
+  --c2-ink: #1f4a2b;
+  --c3-bg: rgba(242, 167, 181, 0.42);
+  --c3-edge: rgba(205, 110, 130, 0.5);
+  --c3-ink: #6a2333;
+  --c4-bg: rgba(244, 165, 130, 0.4);
+  --c4-edge: rgba(210, 120, 80, 0.5);
+  --c4-ink: #6a3016;
+  --c5-bg: rgba(163, 181, 101, 0.42);
+  --c5-edge: rgba(120, 140, 60, 0.55);
+  --c5-ink: #36421a;
+  --c6-bg: rgba(226, 195, 145, 0.45);
+  --c6-edge: rgba(180, 145, 85, 0.55);
+  --c6-ink: #554020;
+
+  /* type */
+  --font-display: "Bricolage Grotesque Variable", "Instrument Sans Variable",
+    -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-ui: "Instrument Sans Variable", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Helvetica, Arial, sans-serif;
+
+  /* shape + motion */
+  --r-sm: 10px;
+  --r: 16px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root[data-theme="night"] {
+  color-scheme: dark;
+
+  --bg: #0e1511;
+  --bg-deep: #08100c;
+
+  --glass: rgba(30, 44, 36, 0.5);
+  --glass-strong: rgba(34, 50, 41, 0.72);
+  --glass-soft: rgba(30, 44, 36, 0.3);
+  --glass-edge: rgba(255, 255, 255, 0.1);
+  --glass-blur: blur(26px) saturate(140%);
+
+  --line: rgba(232, 237, 230, 0.09);
+  --line-dark: rgba(232, 237, 230, 0.18);
+
+  --text: #e8ede6;
+  --text-soft: #b1bcb3;
+  --text-muted: #7f8c82;
+
+  --accent: #c8e05a;
+  --accent-hover: #d7ec73;
+  --accent-ink: #14201a;
+  --accent-soft: rgba(200, 224, 90, 0.12);
+  --spark: #f2b544;
+
+  --ok: #8fd3a5;
+  --ok-soft: rgba(143, 211, 165, 0.14);
+  --warn: #f2b544;
+  --warn-soft: rgba(242, 181, 68, 0.16);
+  --danger: #f08070;
+  --danger-soft: rgba(240, 128, 112, 0.12);
+  --danger-line: rgba(240, 128, 112, 0.35);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px -6px rgba(0, 0, 0, 0.5);
+  --shadow: 0 2px 6px -2px rgba(0, 0, 0, 0.4),
+    0 18px 40px -18px rgba(0, 0, 0, 0.7);
+  --shadow-lg: 0 4px 12px -4px rgba(0, 0, 0, 0.5),
+    0 40px 80px -30px rgba(0, 0, 0, 0.8);
+
+  --aura-a: rgba(242, 181, 68, 0.32);
+  --aura-b: rgba(200, 224, 90, 0.2);
+  --aura-c: rgba(46, 125, 92, 0.6);
+  --aura-d: rgba(214, 120, 70, 0.22);
+  --grid-line: rgba(232, 237, 230, 0.035);
+
+  --c0-bg: rgba(200, 224, 90, 0.18);
+  --c0-edge: rgba(200, 224, 90, 0.45);
+  --c0-ink: #dcef8a;
+  --c1-bg: rgba(245, 197, 66, 0.17);
+  --c1-edge: rgba(245, 197, 66, 0.42);
+  --c1-ink: #f7d77e;
+  --c2-bg: rgba(143, 185, 150, 0.18);
+  --c2-edge: rgba(143, 185, 150, 0.45);
+  --c2-ink: #b5dbbb;
+  --c3-bg: rgba(242, 167, 181, 0.16);
+  --c3-edge: rgba(242, 167, 181, 0.42);
+  --c3-ink: #f6c2cc;
+  --c4-bg: rgba(244, 165, 130, 0.16);
+  --c4-edge: rgba(244, 165, 130, 0.42);
+  --c4-ink: #f7c2a8;
+  --c5-bg: rgba(163, 181, 101, 0.18);
+  --c5-edge: rgba(163, 181, 101, 0.45);
+  --c5-ink: #cfdc9c;
+  --c6-bg: rgba(226, 195, 145, 0.16);
+  --c6-edge: rgba(226, 195, 145, 0.42);
+  --c6-ink: #ecd6b0;
+}
+
+/* =========================================================
+   BASE
+   ========================================================= */
+
+html {
+  background: var(--bg);
+  transition: background-color 400ms var(--ease);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  /* transparent so the ambient light (body::before, z-index -1)
+     shows; the base colour lives on <html> */
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+  transition: color 400ms var(--ease);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-stretch: 88%;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+::selection {
+  background: var(--spark);
+  color: #14201a;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* =========================================================
+   AMBIENT LIGHT
+   Coloured light fields + a faint timetable grid, sitting
+   behind every glass panel. This is what the blur picks up.
+   ========================================================= */
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+  z-index: -1;
+}
+
+body::before {
+  inset: -25vmax;
+  background:
+    radial-gradient(22vmax 22vmax at 30% 30%, var(--aura-a), transparent 70%),
+    radial-gradient(24vmax 20vmax at 72% 28%, var(--aura-b), transparent 70%),
+    radial-gradient(28vmax 24vmax at 65% 72%, var(--aura-c), transparent 70%),
+    radial-gradient(20vmax 20vmax at 32% 74%, var(--aura-d), transparent 70%);
+  filter: blur(40px);
+  animation: aura-drift 38s ease-in-out infinite alternate;
+  transition: opacity 600ms var(--ease);
+}
+
+body::after {
+  inset: 0;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 72px 44px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 40%, #000 30%, transparent 78%);
+  mask-image: radial-gradient(ellipse at 50% 40%, #000 30%, transparent 78%);
+}
+
+#root {
+  position: relative;
+  isolation: isolate;
+}
+
+@keyframes aura-drift {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(3vmax, -2vmax, 0) rotate(8deg) scale(1.06);
+  }
+  100% {
+    transform: translate3d(-2vmax, 3vmax, 0) rotate(-6deg) scale(1.02);
+  }
+}
+
+/* =========================================================
+   GLASS PRIMITIVE
+   ========================================================= */
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow);
+}
+
+/* =========================================================
+   BUTTON SYSTEM
+   .btn            glass pill (secondary)
+   .btn-primary    solid accent pill
+   .btn-danger     outlined red pill
+   .btn-quiet      text-only
+   ========================================================= */
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-dark);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow-sm);
+  transition:
+    transform 260ms var(--spring),
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 220ms ease,
+    color 180ms ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--glass-strong);
+  border-color: var(--line-dark);
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.965);
+  transition-duration: 90ms;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+    0 8px 22px -10px var(--accent),
+    var(--shadow-sm);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+    0 12px 28px -10px var(--accent),
+    var(--shadow-sm);
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger-line);
+  color: var(--danger);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.btn-quiet {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-soft);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.btn-quiet:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--text);
+}
+
+.btn-sm {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+
+/* =========================================================
+   THEME TOGGLE
+   Floats bottom-right on every screen.
+   ========================================================= */
+
+.theme-toggle {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 4px 14px 4px 4px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-dark);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 260ms var(--spring);
+}
+
+.theme-toggle:hover {
+  transform: translateY(-2px);
+}
+
+.theme-toggle:active {
+  transform: scale(0.96);
+}
+
+.theme-toggle-track {
+  position: relative;
+  width: 64px;
+  height: 34px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(180deg, #bfe3f0 0%, #f6e7b8 100%);
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: background 500ms var(--ease);
+}
+
+:root[data-theme="night"] .theme-toggle-track {
+  background: linear-gradient(180deg, #0d1a14 0%, #1f3a2c 100%);
+}
+
+/* stars, only visible at night */
+.theme-toggle-track::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 12px 9px, #fff, transparent),
+    radial-gradient(1px 1px at 22px 22px, #fff, transparent),
+    radial-gradient(1.2px 1.2px at 9px 24px, #fff, transparent),
+    radial-gradient(1px 1px at 28px 12px, #fff, transparent);
+  opacity: 0;
+  transition: opacity 500ms var(--ease);
+}
+
+:root[data-theme="night"] .theme-toggle-track::before {
+  opacity: 0.9;
+}
+
+.theme-toggle-knob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff6c9, #f2b544 70%);
+  box-shadow: 0 0 14px 2px rgba(242, 181, 68, 0.75);
+  transition:
+    transform 520ms var(--spring),
+    background 500ms var(--ease),
+    box-shadow 500ms var(--ease);
+}
+
+:root[data-theme="night"] .theme-toggle-knob {
+  transform: translateX(30px);
+  background: radial-gradient(circle at 40% 40%, #fbfbf2, #d9dccd 70%);
+  box-shadow: 0 0 12px 1px rgba(232, 237, 230, 0.4);
+}
+
+/* moon crater shadow */
+.theme-toggle-knob::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 70% 30%, transparent 45%, transparent 46%);
+  transition: background 500ms var(--ease);
+}
+
+:root[data-theme="night"] .theme-toggle-knob::after {
+  background:
+    radial-gradient(4px 4px at 9px 9px, rgba(0, 0, 0, 0.12), transparent),
+    radial-gradient(3px 3px at 17px 16px, rgba(0, 0, 0, 0.1), transparent);
+}
+
+.theme-toggle-label {
+  min-width: 34px;
+  text-align: left;
+}
+
+/* the day/night switch sweeps across the screen as a circle of light */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* =========================================================
+   COURSE COLOUR CLASSES (used by timetable + keys)
+   ========================================================= */
+
+.cc-0 { --c-bg: var(--c0-bg); --c-edge: var(--c0-edge); --c-ink: var(--c0-ink); }
+.cc-1 { --c-bg: var(--c1-bg); --c-edge: var(--c1-edge); --c-ink: var(--c1-ink); }
+.cc-2 { --c-bg: var(--c2-bg); --c-edge: var(--c2-edge); --c-ink: var(--c2-ink); }
+.cc-3 { --c-bg: var(--c3-bg); --c-edge: var(--c3-edge); --c-ink: var(--c3-ink); }
+.cc-4 { --c-bg: var(--c4-bg); --c-edge: var(--c4-edge); --c-ink: var(--c4-ink); }
+.cc-5 { --c-bg: var(--c5-bg); --c-edge: var(--c5-edge); --c-ink: var(--c5-ink); }
+.cc-6 { --c-bg: var(--c6-bg); --c-edge: var(--c6-edge); --c-ink: var(--c6-ink); }
+
+/* =========================================================
+   SHARED PAGE HEADER (back link + title) used by sub-pages
+   ========================================================= */
+
+.page-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px 0 10px;
+  margin-bottom: 28px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+  transition: transform 240ms var(--spring), color 150ms ease;
+}
+
+.page-back:hover {
+  color: var(--text);
+  transform: translateX(-2px);
+}
+
+/* =========================================================
+   REDUCED MOTION / SLOW MACHINES
+   ========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+
+  body::before {
+    animation: none;
+  }
+}
+
+/* Browsers without backdrop-filter get solid-ish panels instead */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root,
+  :root[data-theme="day"] {
+    --glass: rgba(255, 255, 255, 0.86);
+    --glass-strong: rgba(255, 255, 255, 0.94);
+  }
+
+  :root[data-theme="night"] {
+    --glass: rgba(24, 36, 29, 0.92);
+    --glass-strong: rgba(28, 41, 33, 0.96);
+  }
+}
+
+@media (max-width: 640px) {
+  .theme-toggle {
+    right: 12px;
+    bottom: 12px;
+    padding-right: 4px;
+  }
+
+  .theme-toggle-label {
+    display: none;
+  }
+}

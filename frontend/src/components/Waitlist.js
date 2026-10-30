@@ -20,16 +20,30 @@ function formatWindow(win) {
       hour: "2-digit",
       minute: "2-digit",
     });
-  if (win.open) return `Open now — closes ${fmt(closes)}`;
+  if (win.open) return `Closes ${fmt(closes)}`;
   const now = new Date();
   if (now < opens) return `Opens ${fmt(opens)}`;
-  return `Closed — was open until ${fmt(closes)}`;
+  return `Closed ${fmt(closes)}`;
 }
 
-export default function Waitlist() {
+function windowState(win) {
+  if (!win || !win.configured) return "unscheduled";
+  if (win.open) return "open";
+  return new Date() < new Date(win.opens_at) ? "upcoming" : "closed";
+}
+
+export default function Waitlist({ onBack }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState(null);
+  // Drop is two taps: the first arms the button, the second drops.
+  const [armedDrop, setArmedDrop] = useState(null);
+
+  useEffect(() => {
+    if (armedDrop == null) return undefined;
+    const t = setTimeout(() => setArmedDrop(null), 3500);
+    return () => clearTimeout(t);
+  }, [armedDrop]);
   const socketRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -83,6 +97,11 @@ export default function Waitlist() {
   };
 
   const handleDrop = async (offeringId) => {
+    if (armedDrop !== offeringId) {
+      setArmedDrop(offeringId);
+      return;
+    }
+    setArmedDrop(null);
     setBusyId(offeringId);
     try {
       await dropCourse(offeringId);
@@ -94,108 +113,149 @@ export default function Waitlist() {
     }
   };
 
-  if (!data && !error) {
-    return <div className="ad-page">Loading Add & Drop…</div>;
-  }
-
   const joinWindow = data?.join_window;
   const allotWindow = data?.allot_window;
+  const joinState = windowState(joinWindow);
+  const allotState = windowState(allotWindow);
 
   return (
     <div className="ad-page">
-      <h2 className="ad-title">Waitlist — Add &amp; Drop</h2>
+      {onBack && (
+        <button type="button" className="page-back" onClick={onBack}>
+          ← Home
+        </button>
+      )}
+
+      <header className="ad-header">
+        <div>
+          <div className="ad-eyebrow">Waitlist</div>
+          <h1 className="ad-title">Add &amp; Drop</h1>
+          <p className="ad-lede">
+            Queue for a course you missed, any professor whose slots fit your timetable. Seats
+            are handed out in queue order while live allotment runs.
+          </p>
+        </div>
+
+        <ol className="ad-timeline" aria-label="Add and Drop schedule">
+          <li className={`ad-step ad-step-${joinState}`}>
+            <span className="ad-step-dot" />
+            <div>
+              <strong>Join the queue</strong>
+              <span>{formatWindow(joinWindow)}</span>
+            </div>
+          </li>
+          <li className={`ad-step ad-step-${allotState}`}>
+            <span className="ad-step-dot" />
+            <div>
+              <strong>Live allotment</strong>
+              <span>{formatWindow(allotWindow)}</span>
+            </div>
+          </li>
+        </ol>
+      </header>
+
       {error && <div className="ad-error">{error}</div>}
 
-      <div className="ad-cards">
-        <div className="ad-card">
-          <div className="ad-card-head">
-            <h3>Add</h3>
-            <span className={`ad-badge ${joinWindow?.open ? "ad-open" : "ad-closed"}`}>
-              {joinWindow?.open ? "Be-in-queue open" : "Be-in-queue closed"}
-            </span>
-          </div>
-          <p className="ad-window-label">{formatWindow(joinWindow)}</p>
-          <p className="ad-sub">
-            Join a course you missed in FFCS. You're queued for the course itself — any
-            non-clashing professor's section works.
-          </p>
+      {!data && !error ? (
+        <div className="ad-loading">Loading Add &amp; Drop…</div>
+      ) : (
+        <div className="ad-cards">
+          <section className="ad-card">
+            <div className="ad-card-head">
+              <h3>Add</h3>
+              <span className={`ad-badge ${joinWindow?.open ? "ad-open" : "ad-closed"}`}>
+                {joinWindow?.open ? "Queue open" : "Queue closed"}
+              </span>
+            </div>
+            <p className="ad-sub">Courses you don't have yet.</p>
 
-          <div className="ad-allot-note">
-            <span className={`ad-badge ${allotWindow?.open ? "ad-open" : "ad-closed"}`}>
-              {allotWindow?.open ? "Live allotment running" : "Live allotment not running"}
-            </span>
-            <span className="ad-sub">{formatWindow(allotWindow)}</span>
-          </div>
-
-          {data?.missing?.length === 0 ? (
-            <p className="ad-empty">You're enrolled in every course — nothing to add.</p>
-          ) : (
-            <ul className="ad-list">
-              {data?.missing?.map((m) => (
-                <li key={m.course_id} className="ad-list-item">
-                  <div>
-                    <strong>{m.course_code}</strong> — {m.course_name}
+            {data?.missing?.length === 0 ? (
+              <p className="ad-empty">You're enrolled in every course. Nothing to add.</p>
+            ) : (
+              <ul className="ad-list">
+                {data?.missing?.map((m) => (
+                  <li key={m.course_id} className={`ad-list-item${m.queued ? " queued" : ""}`}>
                     {m.queued && (
-                      <div className="ad-position">Queue position: #{m.queue_position}</div>
+                      <span className="ad-pos" title="Your place in the queue">
+                        <small>#</small>
+                        {m.queue_position}
+                      </span>
                     )}
-                  </div>
-                  {m.queued ? (
-                    <button
-                      className="ad-btn ad-btn-leave"
-                      disabled={busyId === m.course_id}
-                      onClick={() => handleLeave(m.course_id)}
-                    >
-                      Leave queue
-                    </button>
-                  ) : (
-                    <button
-                      className="ad-btn ad-btn-join"
-                      disabled={!joinWindow?.open || busyId === m.course_id}
-                      onClick={() => handleJoin(m.course_id)}
-                    >
-                      Be in queue
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="ad-card">
-          <div className="ad-card-head">
-            <h3>Drop</h3>
-            <span className="ad-badge ad-open">Always open</span>
-          </div>
-          <p className="ad-sub">
-            Drop any course you're currently enrolled in. No window, no queue — it's instant.
-          </p>
-
-          {data?.enrolled?.length === 0 ? (
-            <p className="ad-empty">You aren't enrolled in anything yet.</p>
-          ) : (
-            <ul className="ad-list">
-              {data?.enrolled?.map((e) => (
-                <li key={e.offering_id} className="ad-list-item">
-                  <div>
-                    <strong>{e.course_code}</strong> — {e.course_name}
-                    <div className="ad-position">
-                      {e.professor} · {e.venue} · {e.course_type}
+                    <div className="ad-item-text">
+                      <span className="ad-code">{m.course_code}</span>
+                      <span className="ad-name">{m.course_name}</span>
+                      {m.queued && (
+                        <span className="ad-position">
+                          {allotState === "open"
+                            ? "Waiting for a seat to open"
+                            : "In the queue, allotment hasn't started"}
+                        </span>
+                      )}
                     </div>
-                  </div>
-                  <button
-                    className="ad-btn ad-btn-drop"
-                    disabled={busyId === e.offering_id}
-                    onClick={() => handleDrop(e.offering_id)}
-                  >
-                    Drop
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+                    {m.queued ? (
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        disabled={busyId === m.course_id}
+                        onClick={() => handleLeave(m.course_id)}
+                      >
+                        Leave queue
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={!joinWindow?.open || busyId === m.course_id}
+                        onClick={() => handleJoin(m.course_id)}
+                      >
+                        {busyId === m.course_id ? "Joining…" : "Join queue"}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="ad-card">
+            <div className="ad-card-head">
+              <h3>Drop</h3>
+              <span className="ad-badge ad-open">Any time</span>
+            </div>
+            <p className="ad-sub">Your courses. Dropping frees the seat for the next person in line.</p>
+
+            {data?.enrolled?.length === 0 ? (
+              <p className="ad-empty">You aren't enrolled in anything yet.</p>
+            ) : (
+              <ul className="ad-list">
+                {data?.enrolled?.map((e) => (
+                  <li key={e.offering_id} className="ad-list-item">
+                    <div className="ad-item-text">
+                      <span className="ad-code">{e.course_code}</span>
+                      <span className="ad-name">{e.course_name}</span>
+                      <span className="ad-position">
+                        {e.professor}, {e.venue}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`btn btn-danger btn-sm${armedDrop === e.offering_id ? " armed" : ""}`}
+                      disabled={busyId === e.offering_id}
+                      onClick={() => handleDrop(e.offering_id)}
+                    >
+                      {busyId === e.offering_id
+                        ? "Dropping…"
+                        : armedDrop === e.offering_id
+                        ? "Tap to confirm"
+                        : "Drop"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
-      </div>
+      )}
     </div>
   );
 }

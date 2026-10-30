@@ -235,10 +235,10 @@ function ReviewsPage({ onBack }) {
 
   return (
     <div className="rv-shell">
-      <button type="button" className="rv-back" onClick={onBack}>← Home</button>
+      <button type="button" className="page-back" onClick={onBack}>← Home</button>
 
-      <h1 className="rv-title">Course Reviews</h1>
-      <p className="rv-sub">Anonymous reviews from students who completed the course.</p>
+      <h1 className="rv-title">Reviews</h1>
+      <p className="rv-sub">Anonymous reviews, only from students who completed the course.</p>
 
       <div className="rv-layout">
         {/* ---------- course list ---------- */}

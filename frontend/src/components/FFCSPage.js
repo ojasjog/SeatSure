@@ -35,14 +35,14 @@ function FacultyRow({ faculty, selected, onSelect }) {
 
       <div className="ffcs-faculty-main">
         <div className="ffcs-faculty-top">
-          {isShortlisted && <span className="ffcs-option-rank">P{faculty.priority_rank}</span>}
+          {isShortlisted && <span className="ffcs-option-rank">Choice {faculty.priority_rank}</span>}
           <span className="ffcs-faculty-name">{faculty.professor_name}</span>
           <span className="ffcs-faculty-slots">{faculty.slot_codes.join(" + ")}</span>
         </div>
         <div className="ffcs-faculty-sections">
           {faculty.sections.map((s) => (
             <span key={s.offering_id} className="ffcs-faculty-section">
-              {s.course_type === "lab" ? "Lab" : "Theory"} · {s.venue}
+              {s.course_type === "lab" ? "Lab" : "Theory"}, {s.venue}
             </span>
           ))}
         </div>
@@ -73,12 +73,15 @@ function TurnCountdown({ unlocksAt, onOpen }) {
   const secondsLeft = Math.max(0, Math.ceil(msLeft / 1000));
 
   return (
-    <div className="ffcs-empty">
-      <div className="ffcs-empty-icon">⏳</div>
-      <h2>Your FFCS turn hasn't started yet</h2>
+    <div className="ffcs-empty ffcs-waiting">
+      <div className="ffcs-countdown" aria-live="polite">
+        <span className="ffcs-countdown-num">{secondsLeft}</span>
+        <span className="ffcs-countdown-unit">sec</span>
+      </div>
+      <h2>Your turn opens soon</h2>
       <p>
-        Registration opens for you in <strong>{secondsLeft}s</strong>, based on your assigned
-        turn number.
+        Registration opens for you based on your assigned turn number. Stay on this page and
+        it will start on its own.
       </p>
     </div>
   );
@@ -95,7 +98,7 @@ function SummaryScreen({ summary, onBack }) {
         <h2>FFCS complete</h2>
         <p>
           {summary.allocated_count} of {summary.courses.length} subjects allocated
-          {summary.not_allocated_count > 0 ? ` · ${summary.not_allocated_count} not allocated` : ""}
+          {summary.not_allocated_count > 0 ? `, ${summary.not_allocated_count} not allocated` : ""}
         </p>
       </div>
 
@@ -121,8 +124,8 @@ function SummaryScreen({ summary, onBack }) {
               <strong>{course.professor_name}</strong>
               <div>
                 {course.sections
-                  .map((s) => `${s.course_type === "lab" ? "Lab" : "Theory"} (${s.slot_codes}) · ${s.venue}`)
-                  .join("  ·  ")}
+                  .map((s) => `${s.course_type === "lab" ? "Lab" : "Theory"} ${s.slot_codes}, ${s.venue}`)
+                  .join("   /   ")}
               </div>
             </div>
           ) : (
@@ -134,7 +137,7 @@ function SummaryScreen({ summary, onBack }) {
       ))}
 
       <button type="button" className="ffcs-register-button" onClick={onBack}>
-        ← Back home
+        Back to home
       </button>
     </div>
   );
@@ -283,23 +286,31 @@ function FFCSPage({ onBack }) {
   return (
     <div className="ffcs-shell">
       <header className="ffcs-header">
-        <button type="button" className="ffcs-back" onClick={onBack}>
+        <button type="button" className="page-back" onClick={onBack}>
           ← Home
         </button>
 
         <div className="ffcs-header-text">
-          <div className="eyebrow">VIT VELLORE · LIVE FFCS</div>
-          <h1>Live FFCS round</h1>
+          <div className="eyebrow">Live round</div>
+          <h1>FFCS</h1>
           <p>
-            Subjects appear one at a time, in the order you ranked them. Pick a faculty member
-            for each — your shortlisted priorities are pinned to the top — then confirm to move
-            to the next subject.
+            Subjects come one at a time, in the order you ranked them. Your shortlisted faculty
+            are pinned to the top. Pick one and confirm to move on.
           </p>
         </div>
 
         {phase === "active" && courseData && (
           <div className="ffcs-progress">
-            Subject {courseData.course_index + 1} of {courseData.total_courses}
+            <div className="ffcs-progress-label">
+              Subject <strong>{courseData.course_index + 1}</strong> of {courseData.total_courses}
+            </div>
+            <div className="ffcs-progress-bar" aria-hidden="true">
+              <div
+                style={{
+                  width: `${((courseData.course_index + 1) / courseData.total_courses) * 100}%`,
+                }}
+              />
+            </div>
           </div>
         )}
       </header>
