@@ -1650,12 +1650,15 @@ async function renumberAddDropQueue(connection, courseId) {
   }
 }
 
-// Sweeps EVERY open seat across every offering of `courseId` against
-// the course's queue, in position order, checking each candidate's
-// REAL confirmed FFCS timetable for a clash. Only runs anything when
-// the Live Allotment window is open — otherwise it's a no-op and seats
-// stay "banked" until that window is open. Returns the list of
-// { student_id, offering_id } promotions actually made.
+// Sweeps open seats across every offering of `courseId` against the
+// course's queue, in position order, checking each candidate's REAL
+// confirmed FFCS timetable for a clash. Only runs when the Live
+// Allotment window is open — otherwise it's a no-op and seats stay
+// "banked" until that window is open. If priorityOfferingId is given
+// (the offering a drop just freed), that offering is tried first, so
+// a drop visibly hands its own seat to the next queued student instead
+// of whichever offering happens to come back first from the DB.
+// Returns the list of { student_id, offering_id } promotions made.
 async function runCourseAllotment(connection, courseId, priorityOfferingId = null) {
   if (!getAllotWindow().open) return [];
 
@@ -1665,9 +1668,6 @@ async function runCourseAllotment(connection, courseId, priorityOfferingId = nul
   );
   if (offerings.length === 0) return [];
 
-  // Try the offering that was just freed (if any) before any other
-  // already-open offering of this course, so a drop visibly hands
-  // its own seat to the next queued student instead of a random one.
   if (priorityOfferingId) {
     offerings.sort((a, b) => {
       if (a.offering_id === priorityOfferingId) return -1;
@@ -1706,8 +1706,14 @@ async function runCourseAllotment(connection, courseId, priorityOfferingId = nul
         `UPDATE CourseOffering SET seats_remaining = seats_remaining - 1 WHERE offering_id = ?`,
         [offering.offering_id]
       );
+      // Upsert: a student who previously dropped THIS exact offering
+      // already has a 'cancelled' row for (student_id, offering_id),
+      // which is unique — a plain INSERT would collide with it.
       await connection.query(
-        `INSERT INTO Enrollment (student_id, offering_id, status) VALUES (?, ?, 'confirmed')`,
+        `INSERT INTO Enrollment (student_id, offering_id, status)
+         VALUES (?, ?, 'confirmed')
+         ON CONFLICT (student_id, offering_id)
+         DO UPDATE SET status = 'confirmed', completed_at = NULL`,
         [entry.student_id, offering.offering_id]
       );
       await connection.query(`DELETE FROM Waitlist WHERE waitlist_id = ?`, [entry.waitlist_id]);
@@ -1884,7 +1890,8 @@ app.delete("/api/addrop/queue/:courseId", authenticateToken, requireStudent, asy
 // Works any time, no window, no queue. Always frees the seat; only
 // actually hands it to the next queued student if the Live Allotment
 // window happens to be open right now (runCourseAllotment no-ops
-// otherwise, and the seat just sits open/"banked").
+// otherwise, and the seat just sits open/"banked"). Tries the offering
+// just freed first, before any other already-open offering.
 // ------------------------------------------------------------
 app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, async (req, res) => {
   const studentId = req.user.student_id;
@@ -1920,7 +1927,7 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
     );
 
     const promotions = await runCourseAllotment(connection, offering.course_id, offeringId);
-    
+
     await connection.commit();
     connection.release();
 
@@ -1942,7 +1949,6 @@ app.post("/api/addrop/drop/:offeringId", authenticateToken, requireStudent, asyn
     res.status(500).json({ error: "Failed to drop this course" });
   }
 });
-
 
 server.listen(PORT, () => {
   console.log(`SeatSure backend running on http://localhost:${PORT}`);
